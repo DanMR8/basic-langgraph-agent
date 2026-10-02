@@ -37,11 +37,15 @@ Agente conversacional con herramientas, construido con **LangGraph** y un **LLM 
 git clone https://github.com/DanMR8/basic-langgraph-agent.git
 cd basic-langgraph-agent
 
-python -m venv venv
-source venv/bin/activate   # Windows: venv\Scripts\activate
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 
 pip install -e .
 ```
+
+> En Windows, si tu consola no es UTF-8 verás `UnicodeEncodeError` al imprimir
+> los emojis. Usa Windows Terminal o `chcp 65001`, o redirige con
+> `python -X utf8 main.py`.
 
 ### 2. Levantar Ollama
 

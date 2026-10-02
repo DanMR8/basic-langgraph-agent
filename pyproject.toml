@@ -62,3 +62,10 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# Los dos warnings que emits vienen de dentro de langgraph (checkpoint/base y un
+# import interno de AgentStatePydantic), no de este proyecto. Se filtran de
+# forma acotada para no tapar cualquier otro warning nuevo.
+filterwarnings = [
+    "ignore:The default value of `allowed_objects`:langchain_core._api.deprecation.LangChainPendingDeprecationWarning",
+    "ignore::langgraph.warnings.LangGraphDeprecatedSinceV10",
+]
