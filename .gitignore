@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Empaquetado
+build/
+dist/
+sdist/
+wheels/
+*.egg-info/
+*.egg
+.installed.cfg
+MANIFEST
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+ENV/
+
+# Dependencias / lockfiles
+node_modules/
+poetry.lock
+uv.lock
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# Linting / formato
+.ruff_cache/
+.mypy_cache/
+.dmypy.json
+.pyre/
+
+# Secretos y config local
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# LangGraph
+.langgraph_api/
+.langgraph/
+
+# Logs
+*.log
+
+# Datos locales (opcional, descomentar si no quieres versionar)
+# data/

@@ -1,0 +1,64 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "basic-langgraph-agent"
+version = "0.1.0"
+description = "Agente conversacional con herramientas usando LangGraph y un LLM local (Ollama)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "DanMR8" }]
+keywords = ["langgraph", "langchain", "ollama", "llm", "agent", "tools", "local-llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# Los límites superiores son lo que evita que el proyecto se rompa solo
+# en los meses siguientes: LangGraph y LangChain han roto API entre minors.
+dependencies = [
+    "langgraph>=0.2.60,<2.0",
+    "langchain-core>=0.3.0,<1.0",
+    "langchain-ollama>=0.3.0,<1.0",
+    "python-dotenv>=1.0.0,<2.0",
+    "typing-extensions>=4.9.0",
+    "pydantic>=2.7.0,<3.0",
+]
+
+[project.optional-dependencies]
+# Integración futura con llama.cpp (no incluida en el código todavía).
+# Habilítala con:  pip install -e ".[llamacpp]"
+llamacpp = ["langchain-llamacpp>=0.3.0,<1.0"]
+
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/DanMR8/basic-langgraph-agent"
+Repository = "https://github.com/DanMR8/basic-langgraph-agent"
+Issues = "https://github.com/DanMR8/basic-langgraph-agent/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agent", "config"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

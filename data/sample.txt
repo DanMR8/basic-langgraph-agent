@@ -1,0 +1,17 @@
+LangGraph es una librería de LangChain para construir agentes como grafos de estado.
+Permite definir nodos (funciones) y aristas (transiciones) de forma explícita.
+
+Conceptos clave:
+- State: objeto compartido que todos los nodos leen y escriben.
+- Node: función que recibe el estado y devuelve parcialmente actualizado.
+- Edge: conexión entre nodos; puede ser condicional.
+- Conditional edges: el grafo decide el siguiente nodo en runtime.
+
+Ventajas sobre cadenas simples:
+1. Control de flujo explícito y visualizable.
+2. Ciclos (loops) para agentes que piensan-actúan repetidamente.
+3. Persistencia de estado entre pasos.
+4. Fácil depuración con LangSmith.
+
+Un agente ReAct sigue el ciclo:
+Razonamiento → Acción (herramienta) → Observación → Repetir hasta respuesta final.
