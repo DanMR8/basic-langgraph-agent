@@ -26,8 +26,9 @@ Agente conversacional con herramientas, construido con **LangGraph** y un **LLM 
 
 > ⚠️ **Ninguna herramienta se ejecuta sin tu autorización.** Cuando el modelo
 > pide una, el grafo se suspende y te muestra qué quiere hacer y con qué
-> argumentos. Responde `[s/N]`; si dices que no, el motivo se le devuelve al
-> modelo y sigue pensando sin haber ejecutado nada.
+> argumentos. Responde `[s/N]`; si dices que no, el grafo registra el rechazo y
+> el turno termina. El modelo ve ese aviso en el historial del siguiente turno,
+> pero nada se ejecutó nunca.
 
 ## 🚀 Quickstart
 
@@ -82,7 +83,7 @@ Tú › qué clima hace en Guadalajara
 🤖 › ⚠️  El agente quiere ejecutar:
        • get_weather(city='Guadalajara')
        ¿Autorizas? [s/N] n
-      Entendido, no voy a consultar el clima sin tu autorización.
+      🚫  Operación rechazada por el usuario: get_weather. La herramienta NO se ejecutó.
 ```
 ---
 ##  Arquitectura del grafo
@@ -95,12 +96,13 @@ Tú › qué clima hace en Guadalajara
    │ agent  │ ────────────► │ approve  │ ──────► │ tools │
    │ (LLM)  │               │ (gate)   │         │       │
    └───┬────┘               └────┬─────┘         └───┬───┘
-       │                         │ no                 │
-       │ ◄───────────────────────┘                   │
-       │ ◄───────────────────────────────────────────┘
-       │ respuesta sin herramientas
-       ▼
-      END
+       │  ◄──────────────────────┘                    │
+       │  ◄───────────────────────────────────────────┘
+       │  (resultado de la herramienta)
+       │
+       │   respuesta sin herramientas  ┌────────┐
+       └──────────────────────────────►│  END   │◄── no
+                                        └────────┘
 ```
 
 - **agent**: el LLM razona y decide si pide herramientas.
@@ -109,6 +111,9 @@ Tú › qué clima hace en Guadalajara
 - **tools**: ejecuta solo lo ya aprobado y devuelve el resultado al agente.
 - **Conditional edges**: el grafo elige la ruta en runtime, según la salida del
   LLM o según la decisión humana.
+- **El rechazo es terminal**: `route_after_approval` devuelve `end`, no `agent`.
+  Turno cerrado y sin ejecutar, para que el rechazo no dependa de lo que el
+  modelo decida narrar después.
 
 > El ciclo está acotado por diseño: cada vuelta al `agent` pasa por
 > `approve`, así que **el humano es el freno real**. `recursion_limit` queda

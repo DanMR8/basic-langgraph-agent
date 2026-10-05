@@ -21,6 +21,14 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 RECURSION_LIMIT: int = 25
 SYSTEM_PROMPT: str = (
     "Eres un asistente útil con acceso a herramientas. "
+    # ── EXPERIMENTO ────────────────────────────────────────────────────────
+    # Descomenta estas 3 líneas y reinicia. Pretende evitar que el modelo pida
+    # herramientas para preguntas conversacionales (hoy dispara search_files).
+    # Probado con llama3.1:8b sin efecto, aquí y al final del prompt: puede
+    # que sí funcione con un modelo más grande.
+    # "Si la pregunta no requiere datos externos ni una herramienta, "
+    # "contesta en texto directamente y no llames a ninguna. "
+    # ───────────────────────────────────────────────────────────────────────
     "Usa la herramienta de cálculo para operaciones matemáticas. "
     "Usa la herramienta de clima para preguntas sobre el clima. "
     "Usa la herramienta de búsqueda en archivos para encontrar información "

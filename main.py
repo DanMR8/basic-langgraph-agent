@@ -44,6 +44,12 @@ def _emitir(payload) -> None:
                 print(chunk.content, end="", flush=True)
             elif nodo == "tools" and chunk.content:
                 print(f"\n   ⚙️  {chunk.content}")
+            elif nodo == "approve" and chunk.content:
+                # ── EXPERIMENTO ────────────────────────────────────────────
+                # Comenta estas 3 líneas para volver al comportamiento previo:
+                # el rechazo se registra en el grafo pero la CLI no muestra nada
+                # y el usuario ve un turno en blanco.
+                print(f"\n   🚫  {chunk.content}")
 
         snapshot = agent.get_state(CONFIG)
         if not snapshot.next:
