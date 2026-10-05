@@ -49,7 +49,7 @@ def build_agent(checkpointer=None):
     workflow.add_conditional_edges(
         "approve",
         route_after_approval,
-        {"tools": "tools", "agent": "agent"},
+        {"tools": "tools", "end": END},
     )
 
     # Tras ejecutar, el agente vuelve a razonar con el resultado en contexto.

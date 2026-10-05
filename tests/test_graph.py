@@ -72,7 +72,7 @@ class TestEnrutado:
         rechazo = ToolMessage(
             content="El usuario rechazó", tool_call_id="call_1", name="calculator"
         )
-        assert route_after_approval({"messages": [rechazo]}) == "agent"
+        assert route_after_approval({"messages": [rechazo]}) == "end"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -124,9 +124,13 @@ class TestAprobacionHumana:
             m for m in resultado["messages"] if isinstance(m, ToolMessage) and m.tool_call_id
         ]
         assert len(rechazos) == 1
-        assert "rechazó" in rechazos[0].content
-        assert resultado["messages"][-1].content == "Entendido, no lo calculo."
-        assert any(isinstance(m, ToolMessage) for m in fake.prompts[-1])
+        aviso = rechazos[0].content
+        # Con rechazo terminal el turno termina: no hay respuesta narrativa del LLM
+        # tras el rechazo y el grafo no vuelve a 'agent'.
+        assert "rechazad" in aviso.lower()
+        assert "herramienta" in aviso.lower() or "NO" in aviso
+        # El último mensaje del historial es el ToolMessage de rechazo
+        assert isinstance(resultado["messages"][-1], ToolMessage)
 
     def test_sin_resume_la_herramienta_no_se_ejecuta(self, montar_grafo):
         grafo, cfg, _ = montar_grafo(turno_completo("El resultado es 4"))

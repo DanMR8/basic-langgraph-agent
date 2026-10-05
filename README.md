@@ -1,8 +1,8 @@
 # basic-langgraph-agent
 
-Agente conversacional con herramientas, construido con **LangGraph** y un **LLM local** (Ollama). Demuestra el patrón agente LLM + orquestación con grafos de estado, e incluye las tres piezas que se agregan antes de poner un agente en producción: **aprobación humana**, **streaming** y **memoria de sesión**.
+[![CI](https://github.com/DanMR8/basic-langgraph-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/DanMR8/basic-langgraph-agent/actions/workflows/ci.yml)
 
-## 🧠 Conceptos que demuestra
+Agente conversacional con herramientas, construido con **LangGraph** y un **LLM local** (Ollama). Demuestra el patrón agente LLM + orquestación con grafos de estado, e incluye las tres piezas que se agregan antes de poner un agente en producción: **aprobación humana**, **streaming** y **memoria de sesión**.
 
 | Concepto | Dónde |
 |---|---|
@@ -68,7 +68,7 @@ cp .env.example .env
 python main.py
 ```
 
-## 💬 Ejemplos de uso
+## Ejemplos de uso
 
 ```
 Tú › cuánto es (4 + 5) * 3 / 2
@@ -84,8 +84,8 @@ Tú › qué clima hace en Guadalajara
        ¿Autorizas? [s/N] n
       Entendido, no voy a consultar el clima sin tu autorización.
 ```
-
-## 🗺️ Arquitectura del grafo
+---
+##  Arquitectura del grafo
 
 ```
                     ┌──────────────────────────────┐
@@ -135,7 +135,7 @@ basic-langgraph-agent/
 └── data/                  # Archivos para search_files
 ```
 
-## 🔧 Personalización
+## Personalización
 
 - **Agregar herramientas**: define una función con `@tool` en `tools.py` y agrégala a `TOOLS`.
 - **Cambiar modelo**: edita `OLLAMA_MODEL` en `.env` (cualquier modelo de Ollama).
@@ -144,7 +144,7 @@ basic-langgraph-agent/
 - **Quitar la aprobación**: borra el nodo `approve` y sus aristas en `graph.py`. Ojo: sin él,
   el LLM puede pedir herramientas en bucle hasta agotar `RECURSION_LIMIT`.
 
-## 🧪 Tests
+## Tests
 
 ```bash
 pip install -e ".[dev]"
@@ -155,12 +155,12 @@ La suite sustituye el LLM por un doble, así que **no necesita Ollama ni red**:
 37 tests que cubren el ciclo de aprobación completo, el enrutado y las tres
 herramientas.
 
-## 📦 Dependencias principales
+## Dependencias principales
 
 - [LangGraph](https://github.com/langchain-ai/langgraph) — orquestación con grafos, `interrupt()`, checkpointing
 - [LangChain](https://github.com/langchain-ai/langchain) — abstracciones de LLM y herramientas
 - [Ollama](https://ollama.com) — runtime de modelos locales
 
-## 📄 Licencia
+## Licencia
 
 MIT — úsalo, modifícalo, compártelo.

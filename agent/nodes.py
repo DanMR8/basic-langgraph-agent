@@ -52,13 +52,19 @@ def approve_tools(state: AgentState) -> dict:
     if decision == "aprobar":
         return {}
 
-    # Rechazado: se devuelve un ToolMessage por cada tool_call para que el
-    # historial quede consistente y el LLM sepa que no se ejecutó nada.
+    # Rechazado: en lugar de devolver el control al LLM para que narre el
+    # rechazo (lo cual no es determinista, especialmente en modelos pequeños),
+    # registramos un ToolMessage informativo y dejamos que el turno termine.
+    # Esta es una decisión de diseño para que el rechazo sea determinista y
+    # seguro (no permite que el modelo invente un resultado tras rechazarlo).
     names = ", ".join(r["name"] for r in requested)
     return {
         "messages": [
             ToolMessage(
-                content=f"El usuario rechazó ejecutar: {names}.",
+                content=(
+                    f"Operación rechazada por el usuario: {names}. "
+                    "La herramienta NO se ejecutó."
+                ),
                 tool_call_id=c["id"],
                 name=c["name"],
             )
@@ -68,9 +74,9 @@ def approve_tools(state: AgentState) -> dict:
 
 
 def route_after_approval(state: AgentState) -> str:
-    """Si lo último que se escribió fue un ToolMessage, fue un rechazo."""
+    """Si lo último fue un rechazo, termina el turno (rechazo terminal)."""
     if isinstance(state["messages"][-1], ToolMessage):
-        return "agent"
+        return "end"
     return "tools"
 
 
