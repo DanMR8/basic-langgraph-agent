@@ -5,10 +5,12 @@ from langgraph.graph import END, START, StateGraph
 
 from agent.nodes import (
     approve_tools,
-    call_model,
+    conversar,
+    responder,
     route_after_approval,
     run_tools,
     should_continue,
+    validar,
 )
 from agent.state import AgentState
 
@@ -17,43 +19,59 @@ def build_agent(checkpointer=None):
     """Compila y devuelve el grafo ejecutable del agente.
 
     Flujo:
-        START → agent ──(pidió herramientas)──→ approve
-                   ▲                             │
-                   │                    aprobado │ rechazado
-                   │                             ▼
-                   └──────────────────────  agent
-                   ▲                             │
-                   └────────────────────  tools ←┘ (aprobado)
-                   │
-                   └──(respuesta final)──→ END
+        START → conversar ──(respondió en texto)──────────────────────→ END
+                    │
+                    └─(pidió herramienta)→ validar
+                                             ├─(veta)─────────────────→ responder → END
+                                             └─(deja pasar)→ approve
+                                                                        │
+                                                            aprobado ▲ │ ▼ rechazado
+                                                                     tools    END
+                                                                        │
+                                                                        ▼
+                                                                  responder → END
+
+    `conversar` abre el turno hablando con el usuario y `responder` lo cierra;
+    entre los dos, `validar` decide si la herramienta que pide llega al humano
+    o se descarta en el acto. El ciclo siempre termina en una respuesta: sea
+    que se ejecutó algo, sea que se vetó.
 
     El `checkpointer` no es opcional en la práctica: `interrupt()` necesita un
     hilo persistente para poder suspender y reanudar el grafo.
     """
     workflow = StateGraph(AgentState)
 
-    workflow.add_node("agent", call_model)
+    workflow.add_node("conversar", conversar)
+    workflow.add_node("validar", validar)
     workflow.add_node("approve", approve_tools)
     workflow.add_node("tools", run_tools)
+    workflow.add_node("responder", responder)
 
-    workflow.add_edge(START, "agent")
+    workflow.add_edge(START, "conversar")
 
-    # El modelo pidió herramientas: exige confirmación antes de actuar.
+    # Pedir herramienta no es hablar con el usuario: se veta antes de molestar.
     workflow.add_conditional_edges(
-        "agent",
+        "conversar",
         should_continue,
-        {"approve": "approve", "end": END},
+        {"validar": "validar", "end": END},
     )
 
-    # Aprobado -> se ejecuta. Rechazado -> el LLM se entera y sigue pensando.
+    # `validar` no usa aristas: devuelve Command(goto=...) hacia approve o
+    # responder, según su veredicto.
+
+    # Aprobado -> se ejecuta. Rechazado -> el turno termina aquí, sin narrarlo.
     workflow.add_conditional_edges(
         "approve",
         route_after_approval,
         {"tools": "tools", "end": END},
     )
 
-    # Tras ejecutar, el agente vuelve a razonar con el resultado en contexto.
-    workflow.add_edge("tools", "agent")
+    # Tras ejecutar, el resultado se evalúa y se responde al usuario.
+    workflow.add_edge("tools", "responder")
+
+    # El cierre del turno nunca pide herramientas, así que no puede reabrir el
+    # ciclo: ni siquiera volviendo a `conversar`.
+    workflow.add_edge("responder", END)
 
     return workflow.compile(checkpointer=checkpointer)
 

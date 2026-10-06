@@ -68,10 +68,11 @@ def _evaluar(nodo: ast.AST) -> int | float:
 
 @tool
 def calculator(expression: str) -> str:
-    """Evalúa una expresión matemática de forma segura.
+    """Úsala SOLO cuando la respuesta dependa de una cuenta aritmética concreta.
 
     Soporta: + - * / ** % // paréntesis y números (enteros y decimales).
     Ejemplo: "(4 + 5) * 3 / 2"
+    Si la pregunta no es una cuenta, no la llames: responde tú en texto.
     """
     try:
         return f"Resultado: {_evaluar(ast.parse(expression.strip(), mode='eval'))}"
@@ -89,7 +90,10 @@ def calculator(expression: str) -> str:
 
 @tool
 def get_weather(city: str) -> str:
-    """Obtiene el clima actual de una ciudad usando wttr.in.
+    """Devuelve el clima ACTUAL de una ciudad.
+
+    Úsala solo cuando pregunten por el tiempo de una ciudad concreta. Para
+    cualquier otra pregunta, no la llames.
 
     Args:
         city: Nombre de la ciudad en inglés o español.
@@ -144,10 +148,11 @@ def _load_documents() -> dict[str, str]:
 
 @tool
 def search_files(query: str) -> str:
-    """Busca una palabra o frase en los archivos de texto de la carpeta data/.
+    """Busca un término DENTRO de los archivos .txt/.md de la carpeta data/.
 
     Args:
-        query: Término de búsqueda (case-insensitive).
+        query: Una sola palabra o término corto que aparezca en esos archivos
+            (case-insensitive). No le pases una frase entera ni preguntas.
     """
     docs = _load_documents()
     if not docs:

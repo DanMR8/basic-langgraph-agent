@@ -1,9 +1,10 @@
 """Fixtures compartidas.
 
-El LLM real (Ollama) no está disponible en CI, así que la suite sustituye
-`llm_with_tools` por un doble que devuelve respuestas preparadas. Eso permite
-ejercitar el grafo completo --incluidos `interrupt()` y `recursion_limit`--
-sin depender de ningún servicio externo.
+El LLM real (Ollama) no está disponible en CI, así que la suite sustituye las
+tres vistas del modelo (`llm_con_herramientas`, `llm_validador` y
+`llm_sin_herramientas`) por dobles que devuelven respuestas preparadas. Eso
+permite ejercitar el grafo completo --incluidos `interrupt()` y
+`recursion_limit`-- sin depender de ningún servicio externo.
 """
 
 import pytest
@@ -15,7 +16,11 @@ from agent.graph import build_agent
 
 
 class FakeLLM:
-    """Doble de `llm_with_tools`: devuelve respuestas en orden."""
+    """Doble del LLM: devuelve respuestas en orden.
+
+    Cada nodo del grafo tiene el suyo, así que una cola vacía significa que el
+    grafo llamó a un nodo que no debería haber llegado a ejecutarse.
+    """
 
     def __init__(self, responses: list[AIMessage]):
         self.responses = list(responses)
@@ -44,11 +49,24 @@ def config() -> dict:
 
 @pytest.fixture
 def montar_grafo(monkeypatch):
-    """Devuelve una fábrica que construye un grafo con LLM y thread controlados."""
+    """Devuelve una fábrica que construye un grafo con LLM y thread controlados.
 
-    def _montar(responses: list[AIMessage], thread_id: str = "test"):
+    `responses` alimenta por igual a `conversar` (que pide herramientas) y a
+    `responder` (que cierra el turno), que son los dos nodos que hablan. El
+    validador va aparte: `veredicto` fija si deja pasar la herramienta ("SI")
+    o la veta ("NO"), y admite una lista para alternar.
+    """
+
+    def _montar(responses: list[AIMessage], thread_id: str = "test", veredicto="SI"):
         fake = FakeLLM(responses)
-        monkeypatch.setattr(nodes, "llm_with_tools", fake)
+        monkeypatch.setattr(nodes, "llm_con_herramientas", fake)
+        monkeypatch.setattr(nodes, "llm_sin_herramientas", fake)
+
+        decisiones = veredicto if isinstance(veredicto, list) else [veredicto] * 100
+        monkeypatch.setattr(
+            nodes, "llm_validador", FakeLLM([responde(d) for d in decisiones])
+        )
+
         grafo = build_agent(checkpointer=InMemorySaver())
         cfg = {"configurable": {"thread_id": thread_id}, "recursion_limit": 10}
         return grafo, cfg, fake

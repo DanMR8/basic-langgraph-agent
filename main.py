@@ -40,15 +40,15 @@ def _emitir(payload) -> None:
     while True:
         for chunk, meta in agent.stream(payload, config=CONFIG, stream_mode="messages"):
             nodo = meta.get("langgraph_node")
-            if nodo == "agent" and chunk.content:
+            # Solo los nodos que hablan con el usuario imprimen. `validar`,
+            # `approve` y `tools` son parte del turno interno de la herramienta.
+            if nodo in ("conversar", "responder") and chunk.content:
                 print(chunk.content, end="", flush=True)
             elif nodo == "tools" and chunk.content:
                 print(f"\n   ⚙️  {chunk.content}")
             elif nodo == "approve" and chunk.content:
-                # ── EXPERIMENTO ────────────────────────────────────────────
-                # Comenta estas 3 líneas para volver al comportamiento previo:
-                # el rechazo se registra en el grafo pero la CLI no muestra nada
-                # y el usuario ve un turno en blanco.
+                # El rechazo es determinista: el LLM no lo narra, así que no
+                # puede inventar un resultado que nunca se ejecutó.
                 print(f"\n   🚫  {chunk.content}")
 
         snapshot = agent.get_state(CONFIG)
