@@ -175,7 +175,37 @@ def search_files(query: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 4. Listado de archivos locales
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@tool
+def list_files() -> str:
+    """Lista los archivos .txt/.md disponibles en la carpeta data/.
+
+    No lleva argumentos. Úsala cuando pregunten qué archivos hay o qué se
+    puede consultar, antes de buscar nada dentro.
+    """
+    if not DATA_DIR.exists():
+        return f"No existe la carpeta '{DATA_DIR}'."
+    archivos = sorted(
+        [p for ext in ("*.txt", "*.md") for p in DATA_DIR.rglob(ext)]
+    )
+    if not archivos:
+        return f"No hay archivos en '{DATA_DIR}'. Agrega .txt o .md."
+    lineas = []
+    for p in archivos:
+        try:
+            primera = p.read_text(encoding="utf-8", errors="ignore").splitlines()
+            descripcion = primera[0].strip()[:100] if primera else "(vacío)"
+        except Exception:
+            descripcion = "(no se pudo leer)"
+        lineas.append(f"📁 {p.relative_to(DATA_DIR)}: {descripcion}")
+    return f"Archivos en '{DATA_DIR}':\n" + "\n".join(lineas)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Lista de herramientas disponibles para el grafo
 # ─────────────────────────────────────────────────────────────────────────────
 
-TOOLS = [calculator, get_weather, search_files]
+TOOLS = [calculator, get_weather, search_files, list_files]

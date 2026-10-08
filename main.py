@@ -40,16 +40,13 @@ def _emitir(payload) -> None:
     while True:
         for chunk, meta in agent.stream(payload, config=CONFIG, stream_mode="messages"):
             nodo = meta.get("langgraph_node")
-            # Solo los nodos que hablan con el usuario imprimen. `validar`,
-            # `approve` y `tools` son parte del turno interno de la herramienta.
-            if nodo in ("conversar", "responder") and chunk.content:
+            # Hablan con el usuario: el hablador, el trabajador cuando redacta
+            # y los mensajes fijos (rechazo, dato inventado, fallo agotado).
+            # `router` y `tools` son turno interno y no narran nada.
+            if nodo in ("hablador", "trabajador", "approve", "fallo") and chunk.content:
                 print(chunk.content, end="", flush=True)
             elif nodo == "tools" and chunk.content:
                 print(f"\n   ⚙️  {chunk.content}")
-            elif nodo == "approve" and chunk.content:
-                # El rechazo es determinista: el LLM no lo narra, así que no
-                # puede inventar un resultado que nunca se ejecutó.
-                print(f"\n   🚫  {chunk.content}")
 
         snapshot = agent.get_state(CONFIG)
         if not snapshot.next:
@@ -63,7 +60,7 @@ def _emitir(payload) -> None:
 
 def main() -> None:
     print("🤖 Agente local (LangGraph + Ollama)")
-    print("   Herramientas: calculadora · clima · búsqueda en archivos")
+    print("   Herramientas: calculadora · clima · búsqueda y listado en archivos")
     print("   Las herramientas requieren tu aprobación antes de ejecutarse.")
     print("   Escribe 'salir' para terminar.\n")
 

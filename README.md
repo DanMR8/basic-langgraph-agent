@@ -99,48 +99,39 @@ Tú › acabas de consultarlo verdad
 START
  │
  ▼
-conversar ──── respondió en texto ──────────────────────────► END
+router ─────── texto ──────────────► hablador ─────────────────► END
   │
-  │ tool_calls
+  │ herramienta (CALCULO | CLIMA | ARCHIVOS)
   ▼
-validar ────── vetó la petición ──► responder ──────────────► END
-  │
-  │ la deja pasar
-  ▼
-approve ────── rechazaste ──────────────────────────────────► END
-  │
-  │ autorizaste
-  ▼
-tools ────────► responder ──────────────────────────────────► END
+trabajador ─── pide ──► approve ──┬── autorizaste ──► tools ──► trabajador (bucle)
+  ▲                              │                                  ├─ error ──► reintenta (máx 2)
+  │                              │                                  ├─ agotado ──► fallo ──► END
+  │                              │                                  └─ ok ──► redacta ──► END
+  │                              └── rechazaste / dato inventado ──► mensaje fijo ──► END
+  └────────────────────────────── (el trabajador solo ve las herramientas de su ruta)
 ```
 
-- **conversar**: abre el turno hablando con el usuario. Con herramientas
-  vinculadas tiende a pedirlas casi siempre — de un saludo le saca
-  `calculator(expression='hola')` —, así que su juicio no es fiable y su
-  petición no va directo al humano.
-- **validar**: la puerta que faltaba. Ve la pregunta **y** la propuesta
-  concreta con sus argumentos, y responde `SI` o `NO`. Si veta, deja un
-  `ToolMessage` de texto fijo que cierra la `tool_call` abierta —la señal de
-  que hubo veto, no un registro que deba conservarse— sin tocar `AgentState`,
-  que sigue siendo solo `messages`.
+- **router**: clasifica cada turno en UNA palabra (`TEXTO | CALCULO | CLIMA |
+  ARCHIVOS`) a temperatura 0.0. Lo desconocido va a `TEXTO`: ante la duda se
+  habla, no se actúa.
+- **hablador**: responde en texto **sin herramientas vinculadas**. Las conoce
+  en texto (puede describirlas) pero no puede usarlas: no hay decisión que
+  anunciar porque nunca se le ofreció ninguna.
+- **trabajador**: pide la herramienta de su ruta (solo ve ese subconjunto) o
+  redacta el resultado. Si falta el dato no lo inventa: responde en texto
+  pidiéndolo.
 - **approve**: **punto de control humano**. `interrupt()` suspende el grafo y
-  guarda el estado; se reanuda con `Command(resume="aprobar")`.
-- **tools**: ejecuta solo lo ya aprobado y pasa el resultado a `responder`.
-- **responder**: cierra el turno **sin herramientas**. Es lo que garantiza que
-  el ciclo termine siempre en una respuesta: no puede volver a pedir nada, ni
-  siquiera volviendo a `conversar`. Si el turno cierra con un veto, se le
-  añade al `system prompt` de esa llamada —y solo ahí— la orden de no
-  inventarse el resultado, y en el mismo update borra el par `tool_call` +
-  veto con `RemoveMessage`. Lo que queda en el historial es pregunta y
-  respuesta, como en un chat normal: escrito en un mensaje, tanto la orden
-  como el registro salían en la boca del asistente tres turnos después y a
-  partir de ahí se repetían solos.
-- **Conditional edges**: el grafo elige la ruta en runtime; `validar` en cambio
-  devuelve `Command(goto=...)` para decidir sin añadir campos al estado.
+  guarda el estado; se reanuda con `Command(resume="aprobar")`. Antes de
+  preguntar verifica que la ciudad o el término vengan del mensaje del
+  usuario; si el modelo los inventó, ni molesta: mensaje fijo pidiendo el dato.
+- **tools**: ejecuta solo lo ya aprobado.
+- **fallo**: presupuesto de 2 reintentos agotado. Mensaje fijo con el motivo,
+  fin del turno. Lo terminal (rechazo, dato inventado, fallo) es siempre un
+  mensaje fijo, nunca una narración del LLM.
 
-> El ciclo está acotado por estructura, no por `recursion_limit`: `responder`
-> va directo a `END`, así que una aprobación es una ejecución y el turno se
-> cierra. `recursion_limit` queda como red de seguridad, no como freno.
+> El ciclo está acotado por estructura, no por `recursion_limit`: el
+> presupuesto de reintentos más el gate humano cierran el bucle.
+> `recursion_limit` queda como red de seguridad, no como freno.
 
 ## 📁 Estructura
 
@@ -150,7 +141,7 @@ basic-langgraph-agent/
 ├── main.py                # CLI: streaming + gateway de aprobación
 ├── agent/
 │   ├── graph.py           # Definición y compilación del grafo
-│   ├── nodes.py           # Nodos: conversar, validar, aprobar, ejecutar
+  │   ├── nodes.py           # Nodos: router, hablador, trabajador, aprobar, ejecutar y fallo
 │   ├── state.py           # Estado compartido
 │   └── tools.py           # Herramientas del agente
 ├── config/
@@ -167,28 +158,20 @@ basic-langgraph-agent/
 
 - **Agregar herramientas**: define una función con `@tool` en `tools.py` y agrégala a `TOOLS`.
 - **Cambiar modelo**: edita `OLLAMA_MODEL` en `.env` (cualquier modelo de Ollama).
-- **Temperatura por nodo**: `TEMPERATURA_CONVERSAR`, `TEMPERATURA_RESPONDER` y
-  `TEMPERATURA_VALIDADOR` en `config/settings.py`. Ahora mismo 0.5 / 0.7 / 0.
-  El validador se queda en 0 porque clasifica SI/NO a partir de ejemplos y ahí
-  lo que importa es repetir, no improvisar. `conversar` es el único con
-  herramientas vinculadas y por eso no sube de 0.5: medido con llama3.1:8b, a
-  0.7 escribía la llamada como texto en 2 de 8 sesiones. La tabla completa de
-  medidas está en el comentario de la constante.
+- **Temperatura por nodo**: `TEMPERATURA_ROUTER`, `TEMPERATURA_HABLADOR` y
+  `TEMPERATURA_TRABAJADOR` en `config/settings.py`. Ahora mismo 0.0 / 0.5 /
+  0.5. El router se queda en 0 porque clasifica en una palabra y ahí lo que
+  importa es repetir, no improvisar.
 - **Otro LLM local**: cambia `ChatOllama` por `ChatOpenAI` apuntando a LM Studio, llama.cpp, etc.
 - **Ajustar el tope de pasos**: `RECURSION_LIMIT` en `config/settings.py`.
-- **Quitar la aprobación**: borra el nodo `approve` y sus aristas en `graph.py`. Ojo: sin él,
-  el validador deja pasar lo que le parezca necesario y nada se lo discute.
-- **Ajustar el umbral del validador**: los ejemplos de `VALIDADOR_PROMPT` en
-  `config/settings.py` decidieron el 8/8 de las pruebas; cambia ahí qué cuenta
-  como herramienta necesaria.
-- **Ajustar la orden de veto**: `INSTRUCCION_VETO` en `config/settings.py`. Se
-  inyecta en el `system prompt` de `responder` solo cuando el turno cierra con
-  un veto, y no se guarda en ningún sitio.
-- **Ajustar el tono**: `SYSTEM_PROMPT` en `config/settings.py`. El formato de
-  sus ejemplos decide lo que el asistente dice: enunciar la decisión
-  (`hola -> responde en texto`) hacía que el modelo la anunciara en cada
-  respuesta; un diálogo de ejemplo le enseña el formato sin nombrarla. La
-  tabla de medidas está en su comentario.
+- **Quitar la aprobación**: borra el nodo `approve` y sus aristas en `graph.py`.
+  Ojo: sin él, nada discute lo que el trabajador pide.
+- **Ajustar el router**: los ejemplos de `ROUTER_PROMPT` en
+  `config/settings.py` deciden la ruta de cada turno; cambia ahí qué cuenta
+  como `CALCULO`, `CLIMA` o `ARCHIVOS`.
+- **Ajustar los mensajes fijos**: `mensaje_rechazo`, `mensaje_falta_dato` y
+  `mensaje_fallo` en `config/settings.py`. Son deterministas: el LLM no los
+  redacta, solo los muestra.
 
 ## Tests
 
@@ -198,9 +181,9 @@ pytest
 ```
 
 La suite sustituye el LLM por un doble, así que **no necesita Ollama ni red**:
-56 tests que cubren el ciclo de aprobación completo, el validador, el enrutado,
-el historial que deja cada turno, la temperatura de cada nodo y las tres
-herramientas.
+44 tests que cubren el enrutado, la rama texto, la aprobación con `interrupt()`,
+el respaldo de argumentos, los reintentos con presupuesto, los mensajes fijos
+y las cuatro herramientas.
 
 ## Dependencias principales
 

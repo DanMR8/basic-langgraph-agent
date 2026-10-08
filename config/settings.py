@@ -11,21 +11,13 @@ load_dotenv()
 OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
 
-# Temperatura por nodo. Cada uno hace un trabajo distinto, así que no comparte
-# un único valor:
-#   - `conversar` y `responder` hablan con el usuario. A 0 el de 8B devolvía
-#     literalmente la misma frase en cada turno.
-#   - `validar` clasifica SI/NO a partir de ejemplos. Ahí la reproducibilidad
-#     importa más que la gracia, así que se queda en 0.
-# Medido con llama3.1:8b sobre la misma sesión de 6 turnos, contando cuántas
-# sesiones se comieron JSON de herramienta crudo por texto
-# (`{"name": "Hola", "parameters": {}}` en vez de llamarla):
-#     conversar=0.7 -> 2 de 8    conversar=0.5 -> 0 de 10    conversar=0.3 -> 0 de 8
-# El riesgo es solo de `conversar`, el único con herramientas vinculadas;
-# `responder` no puede pedir ninguna, así que se queda en 0.7 sin exponerse.
-TEMPERATURA_CONVERSAR: float = 0.5
-TEMPERATURA_RESPONDER: float = 0.7
-TEMPERATURA_VALIDADOR: float = 0.0
+# Temperatura por nodo:
+#   - `router` clasifica en una palabra: reproducibilidad total, 0.0.
+#   - `hablador` y `trabajador` generan texto y llamadas: 0.5, el punto
+#     medido donde el 8B ni se agarra a plantillas ni suelta JSON crudo.
+TEMPERATURA_ROUTER: float = 0.0
+TEMPERATURA_HABLADOR: float = 0.5
+TEMPERATURA_TRABAJADOR: float = 0.5
 
 # ── Datos ───────────────────────────────────────────────────────────────────
 DATA_DIR: Path = Path(os.getenv("DATA_DIR", "./data"))
@@ -36,78 +28,75 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 # superarlo, así que no hace falta un contador propio.
 RECURSION_LIMIT: int = 25
 
-# El marco importa: el prompt anterior decía tres veces "Usa la herramienta de
-# X" y nunca decía que se pudiera contestar en texto, así que el modelo pedía
-# herramientas por defecto. Los ejemplos son los que hacen que el modelo de 8B
-# acierte: la sola instrucción, en negativo o en positivo, no bastaba.
-#
-# Tampoco sirve que los ejemplos sean instrucciones de enrutado
-# ("hola -> responde en texto"): el modelo se las tomó como plantilla de
-# respuesta y empezó a anunciar su decisión cada vez que declinaba usar una
-# herramienta: "No hay necesidad de llamar a una función para responder a esa
-# pregunta. La respuesta es: ...". Prohibirle la frase con la frase escrita
-# no tuvo efecto.
-#
-# Medido con llama3.1:8b, 8 rondas sobre cada una de dos sesiones y el mismo
-# detector en ambos casos:
-#     ejemplos de enrutado (original)  -> 26/80 respuestas con la frase
-#     diálogo de ejemplo, sin marco binario -> 17/80
-# Baja de una tercera parte a una quinta, pero no desaparece. Lo que no probó:
-# quitarle la frase al texto ya escrito, que es lo único determinista.
-SYSTEM_PROMPT: str = (
+# El router decide la ruta con ejemplos salidos de sesiones reales. Lo
+# desconocido va a TEXTO: ante la duda se habla, no se actúa.
+ROUTER_PROMPT: str = (
+    "Clasificas la pregunta del usuario en UNA sola palabra:\n"
+    "TEXTO: saludos, preguntas de conocimiento, opiniones, gracias.\n"
+    "CALCULO: pide una cuenta aritmética concreta.\n"
+    "CLIMA: pregunta por el tiempo de una ciudad.\n"
+    "ARCHIVOS: pregunta qué archivos hay en data/ o qué dice un archivo.\n"
+    "Responde SOLO con la palabra.\n"
+    "Ejemplos:\n"
+    "Pregunta: hola -> TEXTO\n"
+    "Pregunta: ¿quién eres? -> TEXTO\n"
+    "Pregunta: ¿qué es un grafo? -> TEXTO\n"
+    "Pregunta: gracias -> TEXTO\n"
+    "Pregunta: ¿acabas de consultarlo? -> TEXTO\n"
+    "Pregunta: cuánto es (4+5)*3/2 -> CALCULO\n"
+    "Pregunta: clima en Madrid -> CLIMA\n"
+    "Pregunta: ¿lloverá hoy en Tecamac? -> CLIMA\n"
+    "Pregunta: ¿qué archivos hay en data/? -> ARCHIVOS\n"
+    "Pregunta: dame un resumen de langgraph -> ARCHIVOS\n"
+    "Pregunta:"
+)
+
+# El hablador conoce las herramientas en texto pero no las tiene vinculadas:
+# puede hablar de ellas y nunca anunciar una decisión, porque no decide nada.
+HABLADOR_PROMPT: str = (
     "Eres un asistente conversacional. Respondes en español, de forma concisa "
-    "y sin preámbulos: tu respuesta es la conversación.\n"
-    "Tienes una calculadora, un servicio de clima y una búsqueda en archivos "
-    "en data/ para cuando el usuario necesite consultar uno de esos datos; si "
-    "te pide que la uses, hazlo.\n"
-    "Ejemplo de conversación:\n"
+    "y directa: tu respuesta es la conversación.\n"
+    "Para datos que no puedes conocer tienes una calculadora, el clima actual "
+    "mediante un servicio en línea y una búsqueda y listado de archivos en "
+    "data/. Fuera del clima, no tienes acceso a internet ni a noticias en "
+    "tiempo real. Si te preguntan por ellas, descríbelas; si te preguntan si "
+    "consultaste algo, di la verdad según el historial.\n"
+    "Ejemplo:\n"
     "Usuario: hola\n"
     "Asistente: Hola, ¿en qué puedo ayudarte?\n"
-    "Usuario: ¿quién eres?\n"
-    "Asistente: Soy un asistente conversacional.\n"
-    "Usuario: ¿qué es un grafo de estado?\n"
-    "Asistente: Un modelo que describe un sistema mediante estados y las "
-    "transiciones entre ellos.\n"
-    "Usuario: gracias por la ayuda\n"
-    "Asistente: De nada, a ti.\n"
-    "Usuario: ¿acabas de consultarlo verdad?\n"
-    "Asistente: No, no lo he consultado.\n"
 )
 
-# Se inyecta en el system prompt de `responder` solo cuando el turno cierra con
-# un veto, y no se guarda en ningún sitio: lo que se escribe en el historial
-# persiste y el modelo lo copia en su respuesta. Medido con llama3.1:8b, una
-# orden metida en el ToolMessage de veto salía en la boca del asistente tres
-# turnos después, y a partir de ahí se repetía sola.
-INSTRUCCION_VETO: str = (
-    "Una herramienta que querías usar fue descartada: no se ejecutó y no tienes "
-    "ningún dato de ella. No digas que la consultaste ni te inventes su "
-    "resultado. Contesta en texto con lo que sí sabes, y si no puedes "
-    "responder, dilo."
+# El trabajador no decide si hace falta una herramienta (eso ya lo decidió el
+# router): solo rellena la llamada con la chuleta de sintaxis. Si falta el
+# dato no lo inventa, responde en texto pidiéndolo; la puerta de `approve`
+# lo verifica de todos modos antes de molestar al humano.
+TRABAJADOR_PROMPT: str = (
+    "Pides la herramienta que resuelve la petición del usuario. Devuelve SOLO "
+    "la llamada, sin texto.\n"
+    "Calculadora: una expresión con + - * / ** % // y paréntesis. NO acepta "
+    "nombres ni funciones: 'sqrt(16)' falla; escribe '16 ** 0.5'.\n"
+    "Clima: el nombre de la ciudad.\n"
+    "Archivos: una sola palabra que aparezca en el texto para buscar, o pide "
+    "el listado si preguntan qué hay.\n"
+    "Si falta el dato (por ejemplo la ciudad), no lo inventes: responde en "
+    "texto pidiéndolo.\n"
+    "Si la petición no necesita ningún dato externo, responde en texto.\n"
 )
 
-# El modelo con herramientas NO decide bien cuándo usarlas: medido con
-# llama3.1:8b, pide `calculator(expression='hola')` ante un saludo. La decisión
-# no se le puede delegar, así que se veta cada petición antes de enseñársela al
-# humano. Ve la propuesta concreta, no solo la pregunta, y eso le basta para
-# descartar un argumento que no encaja. Los ejemplos salen de llamadas reales.
-VALIDADOR_PROMPT: str = (
-    "Vetas peticiones de herramientas de un asistente. Te llega una pregunta "
-    "del usuario y la herramienta que el asistente quiere usar con sus "
-    "argumentos. Responde con UNA sola palabra: SI o NO.\n"
-    "SI: la herramienta aporta un dato que el asistente no puede conocer: una "
-    "cuenta exacta, el tiempo actual de una ciudad o el contenido de un archivo "
-    "de data/.\n"
-    "NO: la pregunta se responde en texto, o el argumento no encaja con la "
-    "herramienta.\n"
-    "Ejemplos:\n"
-    "Pregunta: hola | Propuesta: calculator({'expression': 'hola'}) -> NO\n"
-    "Pregunta: gracias | Propuesta: search_files({'query': 'gracias'}) -> NO\n"
-    "Pregunta: ¿qué es un grafo? | Propuesta: search_files({'query': 'grafo'}) -> NO\n"
-    "Pregunta: acabas de consultarlo | Propuesta: search_files({'query': 'consultarlo'}) -> NO\n"
-    "Pregunta: ¿y eso? | Propuesta: calculator({'expression': '¿y eso?'}) -> NO\n"
-    "Pregunta: cuánto es (4+5)*3/2 | Propuesta: calculator({'expression': '(4+5)*3/2'}) -> SI\n"
-    "Pregunta: clima en Madrid | Propuesta: get_weather({'city': 'Madrid'}) -> SI\n"
-    "Pregunta: archivo sobre grafos | Propuesta: search_files({'query': 'grafos'}) -> SI\n"
-    "Respuesta:"
-)
+
+def mensaje_rechazo(nombres: str) -> str:
+    """Fijo y terminal: lo rechazó el humano, el LLM no lo narra."""
+    return (
+        f"Rechazaste el uso de la herramienta necesaria: {nombres}. "
+        "No se ejecutó y no tengo su resultado."
+    )
+
+
+def mensaje_falta_dato(faltante: str) -> str:
+    """Fijo y terminal: el trabajador inventó un argumento."""
+    return f"Me falta {faltante} en tu mensaje: dímelo y lo consulto."
+
+
+def mensaje_fallo(motivo: str) -> str:
+    """Fijo y terminal: se agotó el presupuesto de reintentos."""
+    return f"La herramienta falló dos veces ({motivo}). No puedo completar tu petición."

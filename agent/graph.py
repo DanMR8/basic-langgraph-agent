@@ -4,13 +4,16 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from agent.nodes import (
-    approve_tools,
-    conversar,
-    responder,
+    approve,
+    fallo,
+    hablador,
     route_after_approval,
+    route_router,
+    route_tools,
+    route_trabajador,
+    router,
     run_tools,
-    should_continue,
-    validar,
+    trabajador,
 )
 from agent.state import AgentState
 
@@ -18,60 +21,52 @@ from agent.state import AgentState
 def build_agent(checkpointer=None):
     """Compila y devuelve el grafo ejecutable del agente.
 
-    Flujo:
-        START → conversar ──(respondió en texto)──────────────────────→ END
-                    │
-                    └─(pidió herramienta)→ validar
-                                             ├─(veta)─────────────────→ responder → END
-                                             └─(deja pasar)→ approve
-                                                                        │
-                                                            aprobado ▲ │ ▼ rechazado
-                                                                     tools    END
-                                                                        │
-                                                                        ▼
-                                                                  responder → END
+    Flujo por turno:
+        router -> hablador -> END (texto)
+        router -> trabajador -> approve -> tools -> trabajador (bucle ReAct)
+        En el bucle: error con presupuesto -> reintenta; agotado -> fallo;
+        ok -> el trabajador redacta. Rechazo o dato inventado -> fijo -> END.
 
-    `conversar` abre el turno hablando con el usuario y `responder` lo cierra;
-    entre los dos, `validar` decide si la herramienta que pide llega al humano
-    o se descarta en el acto. El ciclo siempre termina en una respuesta: sea
-    que se ejecutó algo, sea que se vetó.
+    El router decide; el hablador no tiene herramientas vinculadas; el
+    trabajador solo ve las de su ruta. Lo terminal es siempre un mensaje
+    fijo, nunca una narración del LLM.
 
     El `checkpointer` no es opcional en la práctica: `interrupt()` necesita un
     hilo persistente para poder suspender y reanudar el grafo.
     """
     workflow = StateGraph(AgentState)
 
-    workflow.add_node("conversar", conversar)
-    workflow.add_node("validar", validar)
-    workflow.add_node("approve", approve_tools)
+    workflow.add_node("router", router)
+    workflow.add_node("hablador", hablador)
+    workflow.add_node("trabajador", trabajador)
+    workflow.add_node("approve", approve)
     workflow.add_node("tools", run_tools)
-    workflow.add_node("responder", responder)
+    workflow.add_node("fallo", fallo)
 
-    workflow.add_edge(START, "conversar")
-
-    # Pedir herramienta no es hablar con el usuario: se veta antes de molestar.
+    workflow.add_edge(START, "router")
     workflow.add_conditional_edges(
-        "conversar",
-        should_continue,
-        {"validar": "validar", "end": END},
+        "router",
+        route_router,
+        {"texto": "hablador", "herramienta": "trabajador"},
     )
+    workflow.add_edge("hablador", END)
 
-    # `validar` no usa aristas: devuelve Command(goto=...) hacia approve o
-    # responder, según su veredicto.
-
-    # Aprobado -> se ejecuta. Rechazado -> el turno termina aquí, sin narrarlo.
+    workflow.add_conditional_edges(
+        "trabajador",
+        route_trabajador,
+        {"approve": "approve", "end": END},
+    )
     workflow.add_conditional_edges(
         "approve",
         route_after_approval,
         {"tools": "tools", "end": END},
     )
-
-    # Tras ejecutar, el resultado se evalúa y se responde al usuario.
-    workflow.add_edge("tools", "responder")
-
-    # El cierre del turno nunca pide herramientas, así que no puede reabrir el
-    # ciclo: ni siquiera volviendo a `conversar`.
-    workflow.add_edge("responder", END)
+    workflow.add_conditional_edges(
+        "tools",
+        route_tools,
+        {"trabajador": "trabajador", "fallo": "fallo"},
+    )
+    workflow.add_edge("fallo", END)
 
     return workflow.compile(checkpointer=checkpointer)
 

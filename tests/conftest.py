@@ -1,10 +1,10 @@
 """Fixtures compartidas.
 
 El LLM real (Ollama) no está disponible en CI, así que la suite sustituye las
-tres vistas del modelo (`llm_con_herramientas`, `llm_validador` y
-`llm_sin_herramientas`) por dobles que devuelven respuestas preparadas. Eso
-permite ejercitar el grafo completo --incluidos `interrupt()` y
-`recursion_limit`-- sin depender de ningún servicio externo.
+tres vistas del modelo (`llm_router`, `llm_hablador` y `llm_trabajador`) por
+dobles que devuelven respuestas preparadas. Eso permite ejercitar el grafo
+completo --incluidos `interrupt()` y `recursion_limit`-- sin depender de
+ningún servicio externo.
 """
 
 import pytest
@@ -32,6 +32,10 @@ class FakeLLM:
             raise AssertionError("El grafo llamó al LLM más veces de lo previsto")
         return self.responses.pop(0)
 
+    def bind_tools(self, tools):
+        """El trabajador del prototipo vincula según ruta; el doble lo ignora."""
+        return self
+
 
 def pide_herramienta(nombre: str, args: dict, call_id: str = "call_1") -> AIMessage:
     return AIMessage(content="", tool_calls=[{"name": nombre, "args": args, "id": call_id}])
@@ -51,25 +55,18 @@ def config() -> dict:
 def montar_grafo(monkeypatch):
     """Devuelve una fábrica que construye un grafo con LLM y thread controlados.
 
-    `responses` alimenta por igual a `conversar` (que pide herramientas) y a
-    `responder` (que cierra el turno), que son los dos nodos que hablan. El
-    validador va aparte: `veredicto` fija si deja pasar la herramienta ("SI")
-    o la veta ("NO"), y admite una lista para alternar.
+    `habla`/`trabaja` con cola vacía significan "este nodo no debe hablar":
+    el doble falla si lo invocan, en vez de llamar a Ollama.
     """
 
-    def _montar(responses: list[AIMessage], thread_id: str = "test", veredicto="SI"):
-        fake = FakeLLM(responses)
-        monkeypatch.setattr(nodes, "llm_con_herramientas", fake)
-        monkeypatch.setattr(nodes, "llm_sin_herramientas", fake)
-
-        decisiones = veredicto if isinstance(veredicto, list) else [veredicto] * 100
-        monkeypatch.setattr(
-            nodes, "llm_validador", FakeLLM([responde(d) for d in decisiones])
-        )
+    def _montar(router="TEXTO", habla=None, trabaja=None, thread_id="test"):
+        monkeypatch.setattr(nodes, "llm_router", FakeLLM([responde(router)]))
+        monkeypatch.setattr(nodes, "llm_hablador", FakeLLM(list(habla or [])))
+        monkeypatch.setattr(nodes, "llm_trabajador", FakeLLM(list(trabaja or [])))
 
         grafo = build_agent(checkpointer=InMemorySaver())
         cfg = {"configurable": {"thread_id": thread_id}, "recursion_limit": 10}
-        return grafo, cfg, fake
+        return grafo, cfg
 
     return _montar
 

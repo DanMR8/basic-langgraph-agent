@@ -8,14 +8,20 @@ from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
 
-class AgentState(TypedDict):
+class AgentState(TypedDict, total=False):
     """Cada nodo lee y escribe sobre este estado.
 
     add_messages acumula mensajes en lugar de sobrescribirlos,
     lo que da el efecto de "memoria" de la conversación.
+
+    `ruta` la escribe el router (TEXTO | CALCULO | CLIMA | ARCHIVOS) y
+    `reintentos` la cuenta el trabajador: son escrituras de último valor,
+    no acumulación.
 
     El límite de ciclos no vive aquí: lo impone LangGraph con
     `recursion_limit` y `GraphRecursionError`.
     """
 
     messages: Annotated[Sequence[BaseMessage], add_messages]
+    ruta: str
+    reintentos: int
