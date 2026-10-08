@@ -66,5 +66,8 @@ desktop.ini
 # Logs
 *.log
 
+# Documentación interna (no se versiona)
+README.interno.md
+
 # Datos locales (opcional, descomentar si no quieres versionar)
 # data/
