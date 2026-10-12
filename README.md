@@ -64,9 +64,14 @@ Tú › ¿hay bicis en reforma?
 🤖 › ⚠️  El agente quiere ejecutar:
        • ecobici(estacion='reforma')
        ¿Autorizas? [s/N] s
-      ⚙️  Ecobici:
-      🚲 Reforma - Río Guadalquivir: 8 bicis, 12 espacios
-      🚲 Reforma - Insurgentes: 0 bicis, 20 espacios
+      ⚙️  Ecobici — 'reforma' (dato de hace 11s):
+      - 24 coincidencias, top 5 por bicis:
+      | Estación | Bicis | Espacios | Estado |
+      |---|---|---|---|
+      | CE-261 Paseo de la Reforma-Río de la Plata (261) | 42 | 0 | abierta |
+      | CE-022 Reforma - Manchester (022) | 35 | 0 | abierta |
+      - …y 19 más con 'reforma'.
+      Hay bicis en Reforma: la de Paseo de la Reforma-Río de la Plata tiene 42.
 ```
 
 ## Arquitectura

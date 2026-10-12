@@ -48,6 +48,8 @@ ROUTER_PROMPT: str = (
     "Pregunta: ¿lloverá hoy en Tecamac? -> CLIMA\n"
     "Pregunta: ¿hay bicis en reforma? -> MOVILIDAD\n"
     "Pregunta: ¿tiene espacios la 448? -> MOVILIDAD\n"
+    "Pregunta: y que tal cerca del monumento a la madre? -> MOVILIDAD\n"
+    "Pregunta: ¿y en Sullivan? -> MOVILIDAD\n"
     "Pregunta:"
 )
 
@@ -65,6 +67,9 @@ HABLADOR_PROMPT: str = (
     "Ejemplo:\n"
     "Usuario: hola\n"
     "Asistente: Hola, ¿en qué puedo ayudarte?\n"
+    "Usuario: ¿qué sabes sobre ecobici?\n"
+    "Asistente: Es el sistema de bicis compartidas de CDMX, y puedo consultar "
+    "la disponibilidad en tiempo real si me das una estación.\n"
 )
 
 # El trabajador no decide si hace falta una herramienta (eso ya lo decidió el
@@ -78,10 +83,17 @@ TRABAJADOR_PROMPT: str = (
     "nombres ni funciones: 'sqrt(16)' falla; escribe '16 ** 0.5'.\n"
     "Clima: el nombre de la ciudad.\n"
     "Ecobici: la palabra o número de estación tal como lo escribió el "
-    "usuario, sin inventar nombres.\n"
+    "usuario, sin inventar nombres, y conclusion en False: tú redactas el "
+    "resultado y la conclusión determinista solo estorba.\n"
     "Si falta el dato (por ejemplo la ciudad), no lo inventes: responde en "
     "texto pidiéndolo.\n"
     "Si la petición no necesita ningún dato externo, responde en texto.\n"
+    "Al redactar un resultado usa los números tal como los devuelve la "
+    "herramienta: si es 0, dilo sin rodeos.\n"
+    "Si la herramienta no encontró coincidencias, di que no encontraste con "
+    "ese nombre; nunca digas que no hay en la zona.\n"
+    "Si te pidieron 'cerca de', informa la estación de referencia sin afirmar "
+    "cercanía (di 'en X', nunca 'cerca de X'): aún no mides distancias.\n"
 )
 
 
@@ -91,6 +103,21 @@ def mensaje_rechazo(nombres: str) -> str:
         f"Rechazaste el uso de la herramienta necesaria: {nombres}. "
         "No se ejecutó y no tengo su resultado."
     )
+
+
+# Frase de ubicación: el detector (regex, sin LLM) encuentra peticiones como
+# "cerca de mí", y esta instrucción redacta la frase con tono natural. Lleva
+# backstop en el nodo: si el modelo añade de más (bicis, estaciones, cifras),
+# se descarta y va el fijo. El LLM adjetiva, lo determinista decide.
+FRASE_UBICACION_PROMPT: str = (
+    "Escribes UNA sola frase para un asistente: que no tiene acceso a la "
+    "ubicación del usuario. Devuelve solo esa frase, sin saludar, sin ofrecer "
+    "nada y sin mencionar bicis, estaciones ni disponibilidad.\n"
+    "Ejemplo:\n"
+    "Petición: hay bicis cerca de mí\n"
+    "Frase: No tengo acceso a tu ubicación.\n"
+    "Petición:"
+)
 
 
 def mensaje_falta_dato(faltante: str) -> str:
@@ -105,8 +132,9 @@ def mensaje_falta_dato(faltante: str) -> str:
             "el clima (p. ej. 'Madrid')."
         ),
         "la estación": (
-            "Me falta la estación en tu mensaje: dime el nombre o número que "
-            "ves en la cicloestación (p. ej. 'Reforma' o '448')."
+            "Me falta una referencia en tu mensaje: dime una colonia, avenida "
+            "o lugar (p. ej. 'Reforma', 'Azcapotzalco') o el número de la "
+            "cicloestación (p. ej. '448')."
         ),
     }
     return guia.get(faltante, f"Me falta {faltante} en tu mensaje: dímelo y lo consulto.")

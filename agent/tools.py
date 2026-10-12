@@ -238,13 +238,15 @@ def _casa(estacion: dict, clave: str) -> bool:
 
 
 @tool
-def ecobici(estacion: str) -> str:
+def ecobici(estacion: str, conclusion: bool = False) -> str:
     """Disponibilidad de bicis Ecobici CDMX por estación, en tiempo real.
 
     Args:
         estacion: palabra o número tal como lo escribió el usuario
             ("reforma", "710", "lealtad"). No inventes nombres: si no hay
             coincidencia, dilo.
+        conclusion: veredicto determinista ("hay bicis en N de M"). Solo
+            para pruebas sin LLM; con LLM redacta el trabajador.
     """
     import time
 
@@ -261,8 +263,9 @@ def ecobici(estacion: str) -> str:
     halladas = [s for s in info if _casa(s, clave)]
     if not halladas:
         return (
-            f"No encontré estación con '{estacion}'. Prueba con el nombre o "
-            "número exacto que ves en la cicloestación."
+            f"- No encontré estación con '{estacion}'.\n"
+            "- Prueba con una colonia, avenida o lugar (p. ej. 'Reforma', "
+            "'Azcapotzalco') o el número de la cicloestación."
         )
 
     halladas.sort(
@@ -270,21 +273,47 @@ def ecobici(estacion: str) -> str:
         reverse=True,
     )
     ts = estado.get("last_updated", 0)
-    edad = (
-        f" (dato de hace {int(time.time() - ts)}s)" if ts else ""
+    edad = f" (dato de hace {int(time.time() - ts)}s)" if ts else ""
+    n = len(halladas)
+    conteo = (
+        "- 1 coincidencia, top 5 por bicis:"
+        if n == 1
+        else f"- {n} coincidencias, top {_ECOBICI_MAXIMAS} por bicis:"
     )
-    lineas = []
+    lineas = [
+        f"Ecobici — '{estacion}'{edad}:",
+        conteo,
+        "| Estación | Bicis | Espacios | Estado |",
+        "|---|---|---|---|",
+    ]
     for s in halladas[:_ECOBICI_MAXIMAS]:
         e = por_id.get(s["station_id"], {})
-        bicis = e.get("num_bikes_available", "?")
-        docks = e.get("num_docks_available", "?")
-        linea = f"🚲 {s.get('name')} ({s.get('short_name')}): {bicis} bicis, {docks} espacios"
-        if not e.get("is_renting", 1):
-            linea += " [sin servicio ahora]"
-        lineas.append(linea)
+        estado_txt = "abierta" if e.get("is_renting", 1) else "sin servicio"
+        lineas.append(
+            f"| {s.get('name')} ({s.get('short_name')}) "
+            f"| {e.get('num_bikes_available', '?')} "
+            f"| {e.get('num_docks_available', '?')} | {estado_txt} |"
+        )
     if len(halladas) > _ECOBICI_MAXIMAS:
-        lineas.append(f"…y {len(halladas) - _ECOBICI_MAXIMAS} más con '{estacion}'.")
-    return "Ecobici:\n" + "\n".join(lineas) + edad
+        lineas.append(f"- …y {len(halladas) - _ECOBICI_MAXIMAS} más con '{estacion}'.")
+    if conclusion:
+        con_bicis = sum(
+            1
+            for s in halladas
+            if por_id.get(s["station_id"], {}).get("num_bikes_available", 0) > 0
+        )
+        # Veredicto en el texto: el trabajador copia lo escrito, así no tiene
+        # que interpretar los números al redactar (medido: con 0 bicis decía
+        # "hay"). Solo para pruebas sin LLM; con LLM redacta el trabajador.
+        lineas.append(
+            "- Conclusión: "
+            + (
+                f"hay bicis en {con_bicis} de {len(halladas)}."
+                if con_bicis
+                else "sin bicis en las coincidencias."
+            )
+        )
+    return "\n".join(lineas)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

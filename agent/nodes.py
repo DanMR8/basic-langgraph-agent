@@ -1,11 +1,15 @@
 """Nodos del grafo: se clasifica, se habla o se trabaja con gate humano.
-
 El router decide la ruta; la rama texto habla sin herramientas vinculadas;
 la rama herramienta es un mini-ReAct: el trabajador pide, el humano aprueba,
 se ejecuta y el trabajador redacta. Los errores reintentables vuelven al
 trabajador con presupuesto 2; lo terminal (rechazo, dato inventado, fallo
 agotado) es un mensaje fijo, sin narración del LLM.
 """
+
+import ast
+import json
+import re
+from uuid import uuid4
 
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_ollama import ChatOllama
@@ -15,6 +19,7 @@ from langgraph.types import interrupt
 from agent.state import AgentState
 from agent.tools import TOOLS, calculator, ecobici, get_weather
 from config.settings import (
+    FRASE_UBICACION_PROMPT,
     HABLADOR_PROMPT,
     OLLAMA_BASE_URL,
     OLLAMA_MODEL,
@@ -43,6 +48,7 @@ def _modelo(temperatura: float) -> ChatOllama:
 llm_router = _modelo(TEMPERATURA_ROUTER)  # clasifica, no habla
 llm_hablador = _modelo(TEMPERATURA_HABLADOR)  # texto, sin herramientas
 llm_trabajador = _modelo(TEMPERATURA_TRABAJADOR)  # se vincula según ruta
+llm_frase = _modelo(TEMPERATURA_ROUTER)  # una frase acotada, con backstop
 
 # Qué puede pedir el trabajador según la ruta que decidió el router.
 _HERRAMIENTAS_POR_RUTA = {
@@ -101,7 +107,56 @@ def trabajador(state: AgentState) -> dict:
         reintentos += 1
     messages = [{"role": "system", "content": TRABAJADOR_PROMPT}, *state["messages"]]
     respuesta = llm_trabajador.bind_tools(herramientas_para(ruta)).invoke(messages)
+    if not getattr(respuesta, "tool_calls", None):
+        # El 8B a veces escribe la llamada como texto en vez de tool_call
+        # (confusión de rol en una sola generación, no memoria sucia: el
+        # historial de ese turno está limpio). Si parsea y nombra una
+        # herramienta real, se convierte y sigue el flujo normal con gate;
+        # si no, queda como texto y el turno termina.
+        rescate = _rescatar_llamada(getattr(respuesta, "content", ""))
+        if rescate:
+            nombre, params = rescate
+            respuesta = AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": nombre,
+                        "args": params,
+                        "id": f"recuperada-{uuid4().hex[:8]}",
+                    }
+                ],
+            )
     return {"messages": [respuesta], "reintentos": reintentos}
+
+
+_LLAMADA_JSON = re.compile(r'^\s*\{\s*"name"\s*:', re.DOTALL)
+
+
+def _rescatar_llamada(texto) -> tuple | None:
+    """Convierte '{"name": ..., "parameters": {...}}' en llamada real.
+
+    El modelo escribe pseudo-JSON con booleanos Python (True/False) y a veces
+    con cercas de markdown: se intenta JSON y luego literal_eval, ambos sin
+    ejecutar nada. Si no parsea o nombra algo inexistente, None.
+    """
+    texto = str(texto or "").strip()
+    texto = re.sub(r"^```\w*\s*|\s*```$", "", texto).strip()
+    if not _LLAMADA_JSON.match(texto):
+        return None
+    datos = None
+    for intento in (json.loads, ast.literal_eval):
+        try:
+            datos = intento(texto)
+            break
+        except Exception:
+            continue
+    if not isinstance(datos, dict):
+        return None
+    nombre = datos.get("name")
+    params = datos.get("parameters", datos.get("args", {}))
+    if nombre in {t.name for t in TOOLS} and isinstance(params, dict):
+        return nombre, {k: v for k, v in params.items() if isinstance(k, str)}
+    return None
 
 
 def route_trabajador(state: AgentState) -> str:
@@ -124,6 +179,13 @@ def approve(state: AgentState) -> dict:
 
     ok, faltante = _args_con_respaldo(calls, state)
     if not ok:
+        peticion = next(
+            (m.content for m in reversed(state["messages"]) if m.type == "human"),
+            "",
+        )
+        if _pide_ubicacion(peticion):
+            frase = _frase_ubicacion(peticion)
+            return {"messages": [AIMessage(content=f"{frase} {mensaje_falta_dato(faltante)}")]}
         return {"messages": [AIMessage(content=mensaje_falta_dato(faltante))]}
 
     decision = interrupt({"requiere_aprobacion": True, "herramientas": requested})
@@ -139,25 +201,82 @@ def _args_con_respaldo(calls: list, state: AgentState) -> tuple[bool, str]:
 
     Compara sin espacios ("langgraph" casa con "lang graph") porque el
     trabajador puede normalizar el término. La calculadora queda fuera: su
-    expresión se deriva, no se cita. Limitación conocida: seguimientos como
-    "¿y mañana?" sin ciudad no pasan; el trabajador debe pedirla en texto.
+    expresión se deriva, no se cita. Mínimo 3 caracteres: fragmentos como
+    "mi" casarían con cualquier mensaje ("de mi") sin ser una referencia.
+    Limitación conocida: seguimientos como "¿y mañana?" sin ciudad no pasan;
+    el trabajador debe pedirla en texto.
     """
     peticion = next(
         (m.content for m in reversed(state["messages"]) if m.type == "human"),
         "",
     )
     compacta = str(peticion or "").replace(" ", "").lower()
+
+    def respalda(valor: str) -> bool:
+        clave = str(valor or "").replace(" ", "").lower()
+        return len(clave) >= 3 and clave in compacta
+
+    # Qué argumento respalda cada herramienta (la calculadora queda fuera: su
+    # expresión se deriva, no se cita).
+    _RESPALDO_POR_TOOL = {
+        "get_weather": ("city", "la ciudad"),
+        "ecobici": ("estacion", "la estación"),
+    }
     for c in calls:
         args = c.get("args", {}) or {}
-        if c.get("name") == "get_weather":
-            ciudad = str(args.get("city", ""))
-            if not ciudad or ciudad.replace(" ", "").lower() not in compacta:
-                return False, "la ciudad"
-        elif c.get("name") == "ecobici":
-            palabra = str(args.get("estacion", ""))
-            if not palabra or palabra.replace(" ", "").lower() not in compacta:
-                return False, "la estación"
+        if c.get("name") in _RESPALDO_POR_TOOL and not respalda(
+            args.get(_RESPALDO_POR_TOOL[c["name"]][0], "")
+        ):
+            return False, _RESPALDO_POR_TOOL[c["name"]][1]
     return True, ""
+
+
+# Peticiones de ubicación sin referencia utilizable: el agente no sabe dónde
+# está el usuario. "Cerca de X" con X concreta NO casa aquí (eso es una
+# referencia válida); solo la ubicación del propio usuario.
+_PATRON_UBICACION = re.compile(
+    r"(cerca de m[ií]\b|donde estoy|mi ubicaci[óo]n|cerca de aqu[íi]\b"
+    r"|por aqu[íi]\b|donde me encuentro)",
+    re.IGNORECASE,
+)
+
+# Backstop de la frase: si el LLM añade bicis, estaciones, cifras o más de
+# una frase, se descarta. El fallo medido era justo ese ("Sí, hay bicis
+# cerca de ti" sin haber consultado nada).
+_PATRON_FUGA = re.compile(
+    r"(bici|disponib|estaci[óo]n|hay \d+|\d+ bicis|cercan[oa]s|cerca de [a-záéíóú])",
+    re.IGNORECASE,
+)
+_FRASE_UBICACION_FIJA = "No tengo acceso a tu ubicación."
+
+
+def _pide_ubicacion(peticion) -> bool:
+    """True si pide ubicación del usuario sin dar referencia."""
+    return bool(_PATRON_UBICACION.search(str(peticion or "")))
+
+
+def _frase_ubicacion(peticion: str) -> str:
+    """Una frase natural vía LLM, con fijo como red de seguridad."""
+    texto = str(
+        llm_frase.invoke(
+            [
+                {"role": "system", "content": FRASE_UBICACION_PROMPT},
+                {"role": "user", "content": f"Petición: {peticion}"},
+            ]
+        ).content
+        or ""
+    ).strip()
+    if not texto or len(texto) > 140 or _PATRON_FUGA.search(texto):
+        return _FRASE_UBICACION_FIJA
+    # Contrato: una sola frase. El 8B a veces tartamudea unido por coma o
+    # guion ("X, x") o añade una segunda ("X. Con gusto te ayudo."): se queda
+    # la primera frase con contenido real (mínimo 10 para no cortar
+    # abreviaturas como "p. ej.").
+    for parte in re.split(r"[.!?…;:,—–\-]+", texto):
+        parte = parte.strip()
+        if len(parte) >= 10:
+            return parte + "."
+    return _FRASE_UBICACION_FIJA
 
 
 def route_after_approval(state: AgentState) -> str:

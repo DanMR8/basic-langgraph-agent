@@ -11,7 +11,7 @@ from langgraph.errors import GraphRecursionError
 from langgraph.types import Command
 
 from agent.graph import agent
-from agent.nodes import _es_error, route_router
+from agent.nodes import _es_error, _pide_ubicacion, _rescatar_llamada, route_router
 from agent.state import AgentState
 from agent.tools import TOOLS, list_files
 from config.settings import (
@@ -199,8 +199,9 @@ def test_estacion_inventada_ni_siquiera_pide_permiso(montar_grafo):
     grafo.invoke({"messages": [HumanMessage(content="¿hay bicis?")]}, config=cfg)
     assert grafo.get_state(cfg).next == ()
     assert textos_ai(grafo, cfg) == [
-        "Me falta la estación en tu mensaje: dime el nombre o número que "
-        "ves en la cicloestación (p. ej. 'Reforma' o '448')."
+        "Me falta una referencia en tu mensaje: dime una colonia, avenida o lugar "
+        "(p. ej. 'Reforma', 'Azcapotzalco') o el número de la cicloestación "
+        "(p. ej. '448')."
     ]
 
 
@@ -281,3 +282,168 @@ def test_es_error_solo_lo_reintentable():
 
 def test_list_files_muestra_sample():
     assert "sample.txt" in str(list_files.invoke({}))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rescate: JSON escrito como texto se convierte en llamada real
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_rescatar_llamada_valida():
+    nombre, args = _rescatar_llamada(
+        '{"name": "ecobici", "parameters": {"estacion": "reforma"}}'
+    )
+    assert (nombre, args) == ("ecobici", {"estacion": "reforma"})
+
+
+def test_rescatar_llamada_acepta_args():
+    nombre, args = _rescatar_llamada(
+        '{"name": "calculator", "args": {"expression": "2+2"}}'
+    )
+    assert (nombre, args) == ("calculator", {"expression": "2+2"})
+
+
+def test_rescatar_llamada_acepta_booleanos_python():
+    """El modelo escribe True/False, no true/false: igual rescata."""
+    nombre, args = _rescatar_llamada(
+        '{"name": "ecobici", "parameters": {"conclusion": False, "estacion": "x"}}'
+    )
+    assert (nombre, args) == ("ecobici", {"conclusion": False, "estacion": "x"})
+
+
+def test_rescatar_llamada_acepta_cercas_markdown():
+    nombre, args = _rescatar_llamada(
+        '```json\n{"name": "ecobici", "parameters": {"estacion": "x"}}\n```'
+    )
+    assert (nombre, args) == ("ecobici", {"estacion": "x"})
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Hola, ¿en qué puedo ayudarte?",
+        '{"name": "inventada", "parameters": {}}',
+        '{"name": "ecobici", "parameters": "reforma"}',
+        '{"name": "ecobici"',
+        "No tengo acceso a tu ubicación.",
+    ],
+)
+def test_rescatar_llamada_rechaza(texto):
+    assert _rescatar_llamada(texto) is None
+
+
+def test_json_como_texto_sigue_a_aprobacion(montar_grafo):
+    """El trabajador escribió la llamada en texto: se rescata con gate."""
+    grafo, cfg = montar_grafo(
+        router="MOVILIDAD",
+        trabaja=[
+            responde('{"name": "ecobici", "parameters": {"estacion": "reforma"}}'),
+            responde("Listo."),
+        ],
+    )
+    grafo.invoke({"messages": [HumanMessage(content="hay bicis en reforma?")]}, config=cfg)
+    pendientes = grafo.get_state(cfg)
+    assert pendientes.next == ("approve",)
+    herramientas = [
+        i for t in pendientes.tasks for i in t.interrupts
+    ][0].value["herramientas"]
+    assert herramientas == [{"name": "ecobici", "args": {"estacion": "reforma"}}]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Ubicación del usuario: detector + frase con backstop
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("texto", "esperado"),
+    [
+        ("hay bicis cerca de mí", True),
+        ("bicis donde estoy", True),
+        ("mi ubicación actual", True),
+        ("algo cerca de aquí", True),
+        ("cerca de la Lealtad", False),
+        ("hay bicis en reforma", False),
+        ("hola", False),
+    ],
+)
+def test_detector_ubicacion(texto, esperado):
+    assert _pide_ubicacion(texto) is esperado
+
+
+def test_ubicacion_compuesta_frase_mas_guia(montar_grafo):
+    grafo, cfg = montar_grafo(
+        router="MOVILIDAD",
+        trabaja=[pide_herramienta("ecobici", {"estacion": "cercanas"})],
+        frase=[responde("No tengo acceso a tu ubicación.")],
+    )
+    grafo.invoke({"messages": [HumanMessage(content="bicis cerca de mí")]}, config=cfg)
+    assert grafo.get_state(cfg).next == ()
+    assert textos_ai(grafo, cfg) == [
+        "No tengo acceso a tu ubicación. Me falta una referencia en tu mensaje: "
+        "dime una colonia, avenida o lugar (p. ej. 'Reforma', 'Azcapotzalco') "
+        "o el número de la cicloestación (p. ej. '448')."
+    ]
+
+
+def test_backstop_descarta_frase_con_bicis(montar_grafo):
+    """Si el LLM adorna, va el fijo, no su texto."""
+    grafo, cfg = montar_grafo(
+        router="MOVILIDAD",
+        trabaja=[pide_herramienta("ecobici", {"estacion": "cercanas"})],
+        frase=[responde("Claro, hay 5 bicis cerca de ti.")],
+    )
+    grafo.invoke({"messages": [HumanMessage(content="bicis cerca de mí")]}, config=cfg)
+    assert textos_ai(grafo, cfg) == [
+        "No tengo acceso a tu ubicación. Me falta una referencia en tu mensaje: "
+        "dime una colonia, avenida o lugar (p. ej. 'Reforma', 'Azcapotzalco') "
+        "o el número de la cicloestación (p. ej. '448')."
+    ]
+
+
+def test_fragmento_corto_no_respalda_aunque_case(montar_grafo):
+    """"mi" casa con "de mi" por subcadena: el mínimo de 3 lo bloquea."""
+    grafo, cfg = montar_grafo(
+        router="MOVILIDAD",
+        trabaja=[pide_herramienta("ecobici", {"estacion": "mi"})],
+        frase=[responde("No tengo acceso a tu ubicación.")],
+    )
+    grafo.invoke({"messages": [HumanMessage(content="bicis cerca de mí")]}, config=cfg)
+    assert grafo.get_state(cfg).next == ()
+    assert textos_ai(grafo, cfg)[0].startswith("No tengo acceso a tu ubicación.")
+
+
+def test_tartamudeo_de_la_frase_se_colapsa(montar_grafo):
+    grafo, cfg = montar_grafo(
+        router="MOVILIDAD",
+        trabaja=[pide_herramienta("ecobici", {"estacion": "mi"})],
+        frase=[responde("No tengo acceso a tu ubicación.No tengo acceso a tu ubicación.")],
+    )
+    grafo.invoke({"messages": [HumanMessage(content="bicis cerca de mí")]}, config=cfg)
+    assert textos_ai(grafo, cfg)[0].startswith(
+        "No tengo acceso a tu ubicación. Me falta"
+    )
+
+
+def test_segunda_frase_se_recorta(montar_grafo):
+    grafo, cfg = montar_grafo(
+        router="MOVILIDAD",
+        trabaja=[pide_herramienta("ecobici", {"estacion": "mi"})],
+        frase=[responde("No tengo acceso a tu ubicación. Con gusto te ayudo.")],
+    )
+    grafo.invoke({"messages": [HumanMessage(content="bicis cerca de mí")]}, config=cfg)
+    assert textos_ai(grafo, cfg)[0].startswith(
+        "No tengo acceso a tu ubicación. Me falta"
+    )
+
+
+def test_tartamudeo_unido_por_coma_se_colapsa(montar_grafo):
+    grafo, cfg = montar_grafo(
+        router="MOVILIDAD",
+        trabaja=[pide_herramienta("ecobici", {"estacion": "mi"})],
+        frase=[responde("No tengo acceso a tu ubicación, no tengo acceso a tu ubicación.")],
+    )
+    grafo.invoke({"messages": [HumanMessage(content="bicis cerca de mí")]}, config=cfg)
+    assert textos_ai(grafo, cfg)[0].startswith(
+        "No tengo acceso a tu ubicación. Me falta"
+    )

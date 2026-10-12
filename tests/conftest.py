@@ -55,14 +55,15 @@ def config() -> dict:
 def montar_grafo(monkeypatch):
     """Devuelve una fábrica que construye un grafo con LLM y thread controlados.
 
-    `habla`/`trabaja` con cola vacía significan "este nodo no debe hablar":
-    el doble falla si lo invocan, en vez de llamar a Ollama.
+    `habla`/`trabaja`/`frase` con cola vacía significan "este nodo no debe
+    hablar": el doble falla si lo invocan, en vez de llamar a Ollama.
     """
 
-    def _montar(router="TEXTO", habla=None, trabaja=None, thread_id="test"):
+    def _montar(router="TEXTO", habla=None, trabaja=None, frase=None, thread_id="test"):
         monkeypatch.setattr(nodes, "llm_router", FakeLLM([responde(router)]))
         monkeypatch.setattr(nodes, "llm_hablador", FakeLLM(list(habla or [])))
         monkeypatch.setattr(nodes, "llm_trabajador", FakeLLM(list(trabaja or [])))
+        monkeypatch.setattr(nodes, "llm_frase", FakeLLM(list(frase or [])))
 
         grafo = build_agent(checkpointer=InMemorySaver())
         cfg = {"configurable": {"thread_id": thread_id}, "recursion_limit": 10}

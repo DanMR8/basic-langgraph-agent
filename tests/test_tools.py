@@ -222,8 +222,14 @@ def gbfs_mock(monkeypatch):
 
 class TestEcobici:
     def test_encuentra_por_nombre(self, gbfs_mock):
-        salida = ecobici.invoke({"estacion": "molino"})
-        assert "Molino del Rey" in salida and "11 bicis" in salida
+        salida = ecobici.invoke({"estacion": "molino", "conclusion": True})
+        assert "Molino del Rey" in salida and "| 11 | 27 |" in salida
+        assert "- 1 coincidencia, top 5 por bicis:" in salida
+        assert "- Conclusión: hay bicis en 1 de 1." in salida
+
+    def test_sin_conclusion_a_pedido(self, gbfs_mock):
+        salida = ecobici.invoke({"estacion": "molino", "conclusion": False})
+        assert "| 11 | 27 |" in salida and "Conclusión" not in salida
 
     def test_encuentra_por_numero(self, gbfs_mock):
         assert "Molino del Rey" in ecobici.invoke({"estacion": "710"})
@@ -232,8 +238,9 @@ class TestEcobici:
         assert "Rubén Darío" in ecobici.invoke({"estacion": "RUBEN"})
 
     def test_sin_bicis_pero_abierta(self, gbfs_mock):
-        salida = ecobici.invoke({"estacion": "102"})
-        assert "0 bicis" in salida and "20 espacios" in salida
+        salida = ecobici.invoke({"estacion": "102", "conclusion": True})
+        assert "| 0 | 20 |" in salida
+        assert "- Conclusión: sin bicis en las coincidencias." in salida
 
     def test_sin_servicio_lo_dice(self, gbfs_mock):
         assert "sin servicio" in ecobici.invoke({"estacion": "sevilla"})
@@ -241,12 +248,12 @@ class TestEcobici:
     def test_varias_ordenadas_por_bicis_y_topadas(self, gbfs_mock):
         salida = ecobici.invoke({"estacion": "reforma"})
         assert "…y 1 más" in salida
-        assert salida.index("8 bicis") < salida.index("5 bicis") < salida.index("3 bicis")
+        assert salida.index("| 8 |") < salida.index("| 5 |") < salida.index("| 3 |")
 
     def test_sin_coincidencias_guia_reintento(self, gbfs_mock):
         salida = ecobici.invoke({"estacion": "zzz"})
         assert "No encontré estación" in salida
-        assert "nombre o número" in salida
+        assert "colonia, avenida o lugar" in salida
 
     def test_vacia_es_error(self, gbfs_mock):
         assert ecobici.invoke({"estacion": "  "}).startswith("Error:")
