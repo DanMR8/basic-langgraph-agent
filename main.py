@@ -22,7 +22,11 @@ def _pedir_aprobacion(herramientas: list[dict]) -> str:
     """Pide confirmación antes de que el agente ejecute algo."""
     print("\n⚠️  El agente quiere ejecutar:")
     for h in herramientas:
-        args = ", ".join(f"{k}={v!r}" for k, v in h["args"].items())
+        # `conclusion` es indicación de formato para la herramienta, no dato
+        # de la petición: no se muestra.
+        args = ", ".join(
+            f"{k}={v!r}" for k, v in h["args"].items() if k != "conclusion"
+        )
         print(f"   • {h['name']}({args})")
     try:
         respuesta = input("   ¿Autorizas? [s/N] ").strip().lower()
@@ -36,17 +40,25 @@ def _emitir(payload) -> None:
 
     El grafo se detiene en `interrupt()`; aquí se detecta el punto de espera,
     se pregunta al usuario y se reanuda con `Command(resume=...)`.
+
+    Los nodos LLM (`hablador`, `trabajador`) emiten deltas y se imprimen al
+    vuelo. Los nodos con mensaje completo (`approve`, `fallo`, `tools`) a
+    veces llegan en chunks acumulativos: se guarda el último por nodo y se
+    vuelca al cambiar de nodo, para no imprimir dos veces lo mismo.
     """
     while True:
+        fijos: dict[str, str] = {}
+        nodo_actual: str | None = None
         for chunk, meta in agent.stream(payload, config=CONFIG, stream_mode="messages"):
             nodo = meta.get("langgraph_node")
-            # Hablan con el usuario: el hablador, el trabajador cuando redacta
-            # y los mensajes fijos (rechazo, dato inventado, fallo agotado).
-            # `router` y `tools` son turno interno y no narran nada.
-            if nodo in ("hablador", "trabajador", "approve", "fallo") and chunk.content:
+            if nodo != nodo_actual:
+                _volcar_fijos(fijos)
+                nodo_actual = nodo
+            if nodo in ("hablador", "trabajador") and chunk.content:
                 print(chunk.content, end="", flush=True)
-            elif nodo == "tools" and chunk.content:
-                print(f"\n   ⚙️  {chunk.content}")
+            elif nodo in ("approve", "fallo", "tools") and chunk.content:
+                fijos[nodo] = chunk.content
+        _volcar_fijos(fijos)
 
         snapshot = agent.get_state(CONFIG)
         if not snapshot.next:
@@ -56,6 +68,16 @@ def _emitir(payload) -> None:
         payload = Command(resume=_pedir_aprobacion(pendientes[0].value["herramientas"]))
 
     print()
+
+
+def _volcar_fijos(fijos: dict[str, str]) -> None:
+    """Imprime los mensajes completos acumulados, cada uno una sola vez."""
+    for nodo, texto in fijos.items():
+        if nodo == "tools":
+            print(f"\n   ⚙️  {texto}")
+        else:
+            print(texto, end="", flush=True)
+    fijos.clear()
 
 
 def main() -> None:

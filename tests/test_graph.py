@@ -199,9 +199,9 @@ def test_estacion_inventada_ni_siquiera_pide_permiso(montar_grafo):
     grafo.invoke({"messages": [HumanMessage(content="¿hay bicis?")]}, config=cfg)
     assert grafo.get_state(cfg).next == ()
     assert textos_ai(grafo, cfg) == [
-        "Me falta una referencia en tu mensaje: dime una colonia, avenida o lugar "
-        "(p. ej. 'Reforma', 'Azcapotzalco') o el número de la cicloestación "
-        "(p. ej. '448')."
+        "Me falta una referencia en tu mensaje: dime la calle donde está "
+        "(p. ej. 'Reforma', '20 de Noviembre' o 'Insurgentes') o el número de la cicloestación "
+        "(p. ej. '261')."
     ]
 
 
@@ -381,8 +381,8 @@ def test_ubicacion_compuesta_frase_mas_guia(montar_grafo):
     assert grafo.get_state(cfg).next == ()
     assert textos_ai(grafo, cfg) == [
         "No tengo acceso a tu ubicación. Me falta una referencia en tu mensaje: "
-        "dime una colonia, avenida o lugar (p. ej. 'Reforma', 'Azcapotzalco') "
-        "o el número de la cicloestación (p. ej. '448')."
+        "dime la calle donde está (p. ej. 'Reforma', '20 de Noviembre' o 'Insurgentes') "
+        "o el número de la cicloestación (p. ej. '261')."
     ]
 
 
@@ -396,8 +396,8 @@ def test_backstop_descarta_frase_con_bicis(montar_grafo):
     grafo.invoke({"messages": [HumanMessage(content="bicis cerca de mí")]}, config=cfg)
     assert textos_ai(grafo, cfg) == [
         "No tengo acceso a tu ubicación. Me falta una referencia en tu mensaje: "
-        "dime una colonia, avenida o lugar (p. ej. 'Reforma', 'Azcapotzalco') "
-        "o el número de la cicloestación (p. ej. '448')."
+        "dime la calle donde está (p. ej. 'Reforma', '20 de Noviembre' o 'Insurgentes') "
+        "o el número de la cicloestación (p. ej. '261')."
     ]
 
 
@@ -442,6 +442,18 @@ def test_tartamudeo_unido_por_coma_se_colapsa(montar_grafo):
         router="MOVILIDAD",
         trabaja=[pide_herramienta("ecobici", {"estacion": "mi"})],
         frase=[responde("No tengo acceso a tu ubicación, no tengo acceso a tu ubicación.")],
+    )
+    grafo.invoke({"messages": [HumanMessage(content="bicis cerca de mí")]}, config=cfg)
+    assert textos_ai(grafo, cfg)[0].startswith(
+        "No tengo acceso a tu ubicación. Me falta"
+    )
+
+
+def test_tartamudeo_unido_por_y_se_colapsa(montar_grafo):
+    grafo, cfg = montar_grafo(
+        router="MOVILIDAD",
+        trabaja=[pide_herramienta("ecobici", {"estacion": "mi"})],
+        frase=[responde("No tengo acceso a tu ubicación y no tengo acceso a tu ubicación")],
     )
     grafo.invoke({"messages": [HumanMessage(content="bicis cerca de mí")]}, config=cfg)
     assert textos_ai(grafo, cfg)[0].startswith(

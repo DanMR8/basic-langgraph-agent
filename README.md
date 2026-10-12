@@ -2,12 +2,12 @@
 
 [![CI](https://github.com/DanMR8/basic-langgraph-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/DanMR8/basic-langgraph-agent/actions/workflows/ci.yml)
 
-Agente conversacional en español con herramientas, construido con **LangGraph** y un **LLM local** (Ollama). Proyecto de muestra: demuestra un asistente que conversa, consulta datos externos bajo aprobación humana y responde con streaming y memoria de sesión.
+Agente conversacional en español con herramientas, construido con **LangGraph** y un **LLM local** (Ollama). Proyecto de muestra: consulta disponibilidad de bicis Ecobici en tiempo real, y además calcula y da el clima, siempre bajo aprobación humana, con streaming y memoria de sesión.
 
 ## Qué hace
 
 - Conversa en español de forma directa y concisa.
-- Clasifica cada turno y usa la herramienta adecuada: calculadora, clima actual y disponibilidad de bicis Ecobici.
+- Consulta disponibilidad de bicis **Ecobici en tiempo real** (más calculadora y clima actual) clasificando cada turno.
 - **Pide tu autorización antes de ejecutar** cualquier herramienta, mostrándote qué va a hacer y con qué argumentos.
 - Si rechazas o algo falla, lo dice claramente y el turno termina sin inventar resultados.
 - Recuerda la conversación dentro de la sesión.
@@ -16,9 +16,9 @@ Agente conversacional en español con herramientas, construido con **LangGraph**
 
 | Herramienta | Descripción |
 |---|---|
+| `ecobici` | Bicis y espacios libres por cicloestación (CDMX, tiempo real, sin key) |
 | `calculator` | Aritmética segura (sin ejecutar código) |
 | `get_weather` | Clima actual de una ciudad |
-| `ecobici` | Bicis y espacios libres por cicloestación (CDMX, tiempo real) |
 
 ## Quickstart
 
@@ -47,19 +47,6 @@ python main.py
 Tú › hola
 🤖 › Hola, ¿en qué puedo ayudarte?
 
-Tú › cuánto es (4 + 5) * 3 / 2
-🤖 › ⚠️  El agente quiere ejecutar:
-       • calculator(expression='(4 + 5) * 3 / 2')
-       ¿Autorizas? [s/N] s
-      ⚙️  Resultado: 13.5
-      El resultado de la expresión (4+5)*3/2 es 13.5.
-
-Tú › qué clima hace en Guadalajara
-🤖 › ⚠️  El agente quiere ejecutar:
-       • get_weather(city='Guadalajara')
-       ¿Autorizas? [s/N] n
-      Rechazaste el uso de la herramienta necesaria: get_weather. No se ejecutó y no tengo su resultado.
-
 Tú › ¿hay bicis en reforma?
 🤖 › ⚠️  El agente quiere ejecutar:
        • ecobici(estacion='reforma')
@@ -72,6 +59,19 @@ Tú › ¿hay bicis en reforma?
       | CE-022 Reforma - Manchester (022) | 35 | 0 | abierta |
       - …y 19 más con 'reforma'.
       Hay bicis en Reforma: la de Paseo de la Reforma-Río de la Plata tiene 42.
+
+Tú › cuánto es (4 + 5) * 3 / 2
+🤖 › ⚠️  El agente quiere ejecutar:
+       • calculator(expression='(4 + 5) * 3 / 2')
+       ¿Autorizas? [s/N] s
+      ⚙️  Resultado: 13.5
+      El resultado de la expresión (4+5)*3/2 es 13.5.
+
+Tú › qué clima hace en Guadalajara
+🤖 › ⚠️  El agente quiere ejecutar:
+       • get_weather(city='Guadalajara')
+       ¿Autorizas? [s/N] n
+      Rechazaste el uso de la herramienta necesaria: get_weather. No se ejecutó y no tengo su resultado.
 ```
 
 ## Arquitectura

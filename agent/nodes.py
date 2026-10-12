@@ -268,10 +268,19 @@ def _frase_ubicacion(peticion: str) -> str:
     ).strip()
     if not texto or len(texto) > 140 or _PATRON_FUGA.search(texto):
         return _FRASE_UBICACION_FIJA
-    # Contrato: una sola frase. El 8B a veces tartamudea unido por coma o
-    # guion ("X, x") o añade una segunda ("X. Con gusto te ayudo."): se queda
-    # la primera frase con contenido real (mínimo 10 para no cortar
-    # abreviaturas como "p. ej.").
+    return _colapsa_frase(texto)
+
+
+def _colapsa_frase(texto: str) -> str:
+    """Deja una sola frase: colapsa repeticiones y recorta añadidos."""
+    # Repetición unida por punto, coma, "y" o espacio ("X.X", "X, x", "X y X").
+    doblada = re.fullmatch(
+        r"(.+?)[\s.,;:!?…—–\-yY]{1,4}\1\.?", texto.strip(), re.IGNORECASE | re.DOTALL
+    )
+    if doblada and len(doblada.group(1).strip()) >= 10:
+        return doblada.group(1).strip().rstrip(".,;:!?…—–-") + "."
+    # Añadido distinto ("X. Con gusto te ayudo."): la primera con contenido
+    # real (mínimo 10 para no cortar abreviaturas como "p. ej.").
     for parte in re.split(r"[.!?…;:,—–\-]+", texto):
         parte = parte.strip()
         if len(parte) >= 10:

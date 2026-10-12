@@ -47,9 +47,11 @@ ROUTER_PROMPT: str = (
     "Pregunta: clima en Madrid -> CLIMA\n"
     "Pregunta: ¿lloverá hoy en Tecamac? -> CLIMA\n"
     "Pregunta: ¿hay bicis en reforma? -> MOVILIDAD\n"
-    "Pregunta: ¿tiene espacios la 448? -> MOVILIDAD\n"
+    "Pregunta: ¿tiene espacios la 261? -> MOVILIDAD\n"
     "Pregunta: y que tal cerca del monumento a la madre? -> MOVILIDAD\n"
-    "Pregunta: ¿y en Sullivan? -> MOVILIDAD\n"
+    "Pregunta: ¿y en Insurgentes? -> MOVILIDAD\n"
+    "Pregunta: en 5 de mayo -> MOVILIDAD\n"
+    "Pregunta: que hay de los olivos -> MOVILIDAD\n"
     "Pregunta:"
 )
 
@@ -93,7 +95,8 @@ TRABAJADOR_PROMPT: str = (
     "Si la herramienta no encontró coincidencias, di que no encontraste con "
     "ese nombre; nunca digas que no hay en la zona.\n"
     "Si te pidieron 'cerca de', informa la estación de referencia sin afirmar "
-    "cercanía (di 'en X', nunca 'cerca de X'): aún no mides distancias.\n"
+    "cercanía (di 'en X', nunca 'cerca de X' ni 'la más cercana'): aún no "
+    "mides distancias.\n"
 )
 
 
@@ -132,9 +135,9 @@ def mensaje_falta_dato(faltante: str) -> str:
             "el clima (p. ej. 'Madrid')."
         ),
         "la estación": (
-            "Me falta una referencia en tu mensaje: dime una colonia, avenida "
-            "o lugar (p. ej. 'Reforma', 'Azcapotzalco') o el número de la "
-            "cicloestación (p. ej. '448')."
+            "Me falta una referencia en tu mensaje: dime la calle donde está "
+            "(p. ej. 'Reforma', '20 de Noviembre' o 'Insurgentes') o el número "
+            "de la cicloestación (p. ej. '261')."
         ),
     }
     return guia.get(faltante, f"Me falta {faltante} en tu mensaje: dímelo y lo consulto.")

@@ -253,7 +253,7 @@ class TestEcobici:
     def test_sin_coincidencias_guia_reintento(self, gbfs_mock):
         salida = ecobici.invoke({"estacion": "zzz"})
         assert "No encontré estación" in salida
-        assert "colonia, avenida o lugar" in salida
+        assert "calle donde está" in salida
 
     def test_vacia_es_error(self, gbfs_mock):
         assert ecobici.invoke({"estacion": "  "}).startswith("Error:")

@@ -264,8 +264,8 @@ def ecobici(estacion: str, conclusion: bool = False) -> str:
     if not halladas:
         return (
             f"- No encontré estación con '{estacion}'.\n"
-            "- Prueba con una colonia, avenida o lugar (p. ej. 'Reforma', "
-            "'Azcapotzalco') o el número de la cicloestación."
+            "- Prueba con la calle donde está (p. ej. 'Reforma', "
+            "'20 de Noviembre' o 'Insurgentes') o el número de la cicloestación."
         )
 
     halladas.sort(
