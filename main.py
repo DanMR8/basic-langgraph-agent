@@ -60,7 +60,7 @@ def _emitir(payload) -> None:
 
 def main() -> None:
     print("🤖 Agente local (LangGraph + Ollama)")
-    print("   Herramientas: calculadora · clima · búsqueda y listado en archivos")
+    print("   Herramientas: calculadora · clima · ecobici")
     print("   Las herramientas requieren tu aprobación antes de ejecutarse.")
     print("   Escribe 'salir' para terminar.\n")
 

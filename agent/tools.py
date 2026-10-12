@@ -3,6 +3,7 @@
 import ast
 import json
 import operator
+import unicodedata
 import urllib.request
 
 from langchain_core.tools import tool
@@ -205,7 +206,92 @@ def list_files() -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 4. Disponibilidad de Ecobici (GBFS público, sin key)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ECOBICI_BASE = "https://gbfs.mex.lyftbikes.com/gbfs/es"
+_ECOBICI_TIMEOUT = 10
+_ECOBICI_MAXIMAS = 5
+
+
+def _normaliza(texto: str) -> str:
+    """Minúsculas sin acentos ni espacios de más, para casar búsquedas."""
+    sin_acentos = "".join(
+        c
+        for c in unicodedata.normalize("NFD", str(texto or ""))
+        if not unicodedata.combining(c)
+    )
+    return " ".join(sin_acentos.lower().split())
+
+
+def _gbfs(nombre: str) -> dict:
+    req = urllib.request.Request(
+        f"{_ECOBICI_BASE}/{nombre}.json", headers={"User-Agent": "basic-langgraph-agent"}
+    )
+    with urllib.request.urlopen(req, timeout=_ECOBICI_TIMEOUT) as resp:
+        return json.loads(resp.read().decode())
+
+
+def _casa(estacion: dict, clave: str) -> bool:
+    texto = f"{estacion.get('name', '')} {estacion.get('short_name', '')}"
+    return clave in _normaliza(texto)
+
+
+@tool
+def ecobici(estacion: str) -> str:
+    """Disponibilidad de bicis Ecobici CDMX por estación, en tiempo real.
+
+    Args:
+        estacion: palabra o número tal como lo escribió el usuario
+            ("reforma", "710", "lealtad"). No inventes nombres: si no hay
+            coincidencia, dilo.
+    """
+    import time
+
+    clave = _normaliza(estacion)
+    if not clave:
+        return "Error: dime el nombre o número de la estación."
+    try:
+        info = _gbfs("station_information")["data"]["stations"]
+        estado = _gbfs("station_status")
+    except Exception as e:
+        return f"Error: no pude consultar Ecobici: {e}"
+
+    por_id = {e["station_id"]: e for e in estado["data"]["stations"]}
+    halladas = [s for s in info if _casa(s, clave)]
+    if not halladas:
+        return (
+            f"No encontré estación con '{estacion}'. Prueba con el nombre o "
+            "número exacto que ves en la cicloestación."
+        )
+
+    halladas.sort(
+        key=lambda s: por_id.get(s["station_id"], {}).get("num_bikes_available", 0),
+        reverse=True,
+    )
+    ts = estado.get("last_updated", 0)
+    edad = (
+        f" (dato de hace {int(time.time() - ts)}s)" if ts else ""
+    )
+    lineas = []
+    for s in halladas[:_ECOBICI_MAXIMAS]:
+        e = por_id.get(s["station_id"], {})
+        bicis = e.get("num_bikes_available", "?")
+        docks = e.get("num_docks_available", "?")
+        linea = f"🚲 {s.get('name')} ({s.get('short_name')}): {bicis} bicis, {docks} espacios"
+        if not e.get("is_renting", 1):
+            linea += " [sin servicio ahora]"
+        lineas.append(linea)
+    if len(halladas) > _ECOBICI_MAXIMAS:
+        lineas.append(f"…y {len(halladas) - _ECOBICI_MAXIMAS} más con '{estacion}'.")
+    return "Ecobici:\n" + "\n".join(lineas) + edad
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Lista de herramientas disponibles para el grafo
 # ─────────────────────────────────────────────────────────────────────────────
 
-TOOLS = [calculator, get_weather, search_files, list_files]
+# search_files y list_files existen pero están inhabilitadas: la búsqueda en
+# archivos locales no es parte del producto. Se conservan el código y sus
+# tests por si se reactivan.
+TOOLS = [calculator, get_weather, ecobici]

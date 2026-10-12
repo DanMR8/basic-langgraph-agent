@@ -69,5 +69,8 @@ desktop.ini
 # Documentación interna (no se versiona)
 README.interno.md
 
+# Caracterizaciones de APIs (exploración local, no se versiona)
+caracterizaciones/
+
 # Datos locales (opcional, descomentar si no quieres versionar)
 # data/

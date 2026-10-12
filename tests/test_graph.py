@@ -52,8 +52,7 @@ def test_herramientas_expuestas():
     assert {t.name for t in TOOLS} == {
         "calculator",
         "get_weather",
-        "search_files",
-        "list_files",
+        "ecobici",
     }
 
 
@@ -87,7 +86,12 @@ def test_etiqueta_desconocida_va_a_texto(montar_grafo):
 
 @pytest.mark.parametrize(
     ("ruta", "esperado"),
-    [("TEXTO", "texto"), ("CALCULO", "herramienta"), ("CLIMA", "herramienta")],
+    [
+        ("TEXTO", "texto"),
+        ("CALCULO", "herramienta"),
+        ("CLIMA", "herramienta"),
+        ("MOVILIDAD", "herramienta"),
+    ],
 )
 def test_route_router(ruta, esperado):
     assert route_router({"ruta": ruta}) == esperado
@@ -157,7 +161,8 @@ def test_ciudad_inventada_ni_siquiera_pide_permiso(montar_grafo):
     )
     assert grafo.get_state(cfg).next == ()
     assert textos_ai(grafo, cfg) == [
-        "Me falta la ciudad en tu mensaje: dímelo y lo consulto."
+        "Me falta la ciudad en tu mensaje: dime de qué ciudad quieres "
+        "el clima (p. ej. 'Madrid')."
     ]
 
 
@@ -171,18 +176,32 @@ def test_ciudad_respaldada_si_pide_permiso(montar_grafo):
 
 
 def test_query_normalizada_con_respaldo(montar_grafo):
-    """"lang graph" respalda a "langgraph": comparar sin espacios."""
+    """"lealtad" respalda la petición aunque el nombre completo sea largo."""
     grafo, cfg = montar_grafo(
-        router="ARCHIVOS",
+        router="MOVILIDAD",
         trabaja=[
-            pide_herramienta("search_files", {"query": "langgraph"}),
+            pide_herramienta("ecobici", {"estacion": "lealtad"}),
             responde("Listo."),
         ],
     )
     grafo.invoke(
-        {"messages": [HumanMessage(content="resumen de lang graph")]}, config=cfg
+        {"messages": [HumanMessage(content="bicis en Glorieta de la Lealtad")]},
+        config=cfg,
     )
     assert grafo.get_state(cfg).next == ("approve",)
+
+
+def test_estacion_inventada_ni_siquiera_pide_permiso(montar_grafo):
+    grafo, cfg = montar_grafo(
+        router="MOVILIDAD",
+        trabaja=[pide_herramienta("ecobici", {"estacion": "Reforma"})],
+    )
+    grafo.invoke({"messages": [HumanMessage(content="¿hay bicis?")]}, config=cfg)
+    assert grafo.get_state(cfg).next == ()
+    assert textos_ai(grafo, cfg) == [
+        "Me falta la estación en tu mensaje: dime el nombre o número que "
+        "ves en la cicloestación (p. ej. 'Reforma' o '448')."
+    ]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -225,20 +244,15 @@ def test_presupuesto_agotado_termina_con_fijo(montar_grafo):
     assert grafo.get_state(cfg).next == ()
 
 
-def test_sin_match_no_se_reintenta(montar_grafo):
-    """"No se encontró" no es un error: la búsqueda funcionó, se redacta."""
-    grafo, cfg = montar_grafo(
-        router="ARCHIVOS",
-        trabaja=[
-            pide_herramienta("search_files", {"query": "zzz"}),
-            responde("No encontré nada sobre zzz."),
-        ],
-    )
-    grafo.invoke({"messages": [HumanMessage(content="busca zzz")]}, config=cfg)
-    grafo.invoke(Command(resume="aprobar"), config=cfg)
+def test_sin_coincidencias_no_se_reintenta():
+    """"No encontré" no es un error: la consulta funcionó, se redacta."""
+    from agent.nodes import route_tools
 
-    assert textos_ai(grafo, cfg) == ["No encontré nada sobre zzz."]
-    assert grafo.get_state(cfg).values["reintentos"] == 0
+    estado = {
+        "messages": [ToolMessage(content="No encontré estación con 'z'.", tool_call_id="1")],
+        "reintentos": 0,
+    }
+    assert route_tools(estado) == "trabajador"
 
 
 def test_recursion_limit_sigue_siendo_un_freno(montar_grafo):

@@ -13,7 +13,7 @@ from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 
 from agent.state import AgentState
-from agent.tools import TOOLS, calculator, get_weather, list_files, search_files
+from agent.tools import TOOLS, calculator, ecobici, get_weather
 from config.settings import (
     HABLADOR_PROMPT,
     OLLAMA_BASE_URL,
@@ -28,7 +28,7 @@ from config.settings import (
     mensaje_rechazo,
 )
 
-ETIQUETAS = {"TEXTO", "CALCULO", "CLIMA", "ARCHIVOS"}
+ETIQUETAS = {"TEXTO", "CALCULO", "CLIMA", "MOVILIDAD"}
 REINTENTOS_MAXIMOS = 2
 
 
@@ -48,7 +48,7 @@ llm_trabajador = _modelo(TEMPERATURA_TRABAJADOR)  # se vincula según ruta
 _HERRAMIENTAS_POR_RUTA = {
     "CALCULO": [calculator],
     "CLIMA": [get_weather],
-    "ARCHIVOS": [search_files, list_files],
+    "MOVILIDAD": [ecobici],
 }
 
 
@@ -153,10 +153,10 @@ def _args_con_respaldo(calls: list, state: AgentState) -> tuple[bool, str]:
             ciudad = str(args.get("city", ""))
             if not ciudad or ciudad.replace(" ", "").lower() not in compacta:
                 return False, "la ciudad"
-        elif c.get("name") == "search_files":
-            query = str(args.get("query", ""))
-            if not query or query.replace(" ", "").lower() not in compacta:
-                return False, "el término de búsqueda"
+        elif c.get("name") == "ecobici":
+            palabra = str(args.get("estacion", ""))
+            if not palabra or palabra.replace(" ", "").lower() not in compacta:
+                return False, "la estación"
     return True, ""
 
 

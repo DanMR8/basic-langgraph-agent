@@ -7,7 +7,7 @@ Agente conversacional en español con herramientas, construido con **LangGraph**
 ## Qué hace
 
 - Conversa en español de forma directa y concisa.
-- Clasifica cada turno y usa la herramienta adecuada: calculadora, clima actual y búsqueda y listado de archivos locales.
+- Clasifica cada turno y usa la herramienta adecuada: calculadora, clima actual y disponibilidad de bicis Ecobici.
 - **Pide tu autorización antes de ejecutar** cualquier herramienta, mostrándote qué va a hacer y con qué argumentos.
 - Si rechazas o algo falla, lo dice claramente y el turno termina sin inventar resultados.
 - Recuerda la conversación dentro de la sesión.
@@ -18,8 +18,7 @@ Agente conversacional en español con herramientas, construido con **LangGraph**
 |---|---|
 | `calculator` | Aritmética segura (sin ejecutar código) |
 | `get_weather` | Clima actual de una ciudad |
-| `search_files` | Busca texto en archivos `.txt`/`.md` de `data/` |
-| `list_files` | Lista qué archivos hay disponibles en `data/` |
+| `ecobici` | Bicis y espacios libres por cicloestación (CDMX, tiempo real) |
 
 ## Quickstart
 
@@ -60,6 +59,14 @@ Tú › qué clima hace en Guadalajara
        • get_weather(city='Guadalajara')
        ¿Autorizas? [s/N] n
       Rechazaste el uso de la herramienta necesaria: get_weather. No se ejecutó y no tengo su resultado.
+
+Tú › ¿hay bicis en reforma?
+🤖 › ⚠️  El agente quiere ejecutar:
+       • ecobici(estacion='reforma')
+       ¿Autorizas? [s/N] s
+      ⚙️  Ecobici:
+      🚲 Reforma - Río Guadalquivir: 8 bicis, 12 espacios
+      🚲 Reforma - Insurgentes: 0 bicis, 20 espacios
 ```
 
 ## Arquitectura
@@ -80,7 +87,7 @@ El diseño separa tres responsabilidades que en un agente clásico van
 mezcladas:
 
 - **router** — Clasifica cada turno en una palabra (`TEXTO | CALCULO | CLIMA |
-  ARCHIVOS`). Es la única pieza que decide, y decide poco a propósito: ante la
+  MOVILIDAD`). Es la única pieza que decide, y decide poco a propósito: ante la
   duda, se habla, no se actúa.
 - **hablador** — Responde la conversación sin herramientas vinculadas. Puede
   hablar de ellas pero nunca usarlas, así que por construcción no anuncia

@@ -35,7 +35,7 @@ ROUTER_PROMPT: str = (
     "TEXTO: saludos, preguntas de conocimiento, opiniones, gracias.\n"
     "CALCULO: pide una cuenta aritmética concreta.\n"
     "CLIMA: pregunta por el tiempo de una ciudad.\n"
-    "ARCHIVOS: pregunta qué archivos hay en data/ o qué dice un archivo.\n"
+    "MOVILIDAD: pregunta por bicis o espacios de una cicloestación Ecobici.\n"
     "Responde SOLO con la palabra.\n"
     "Ejemplos:\n"
     "Pregunta: hola -> TEXTO\n"
@@ -46,8 +46,8 @@ ROUTER_PROMPT: str = (
     "Pregunta: cuánto es (4+5)*3/2 -> CALCULO\n"
     "Pregunta: clima en Madrid -> CLIMA\n"
     "Pregunta: ¿lloverá hoy en Tecamac? -> CLIMA\n"
-    "Pregunta: ¿qué archivos hay en data/? -> ARCHIVOS\n"
-    "Pregunta: dame un resumen de langgraph -> ARCHIVOS\n"
+    "Pregunta: ¿hay bicis en reforma? -> MOVILIDAD\n"
+    "Pregunta: ¿tiene espacios la 448? -> MOVILIDAD\n"
     "Pregunta:"
 )
 
@@ -57,10 +57,11 @@ HABLADOR_PROMPT: str = (
     "Eres un asistente conversacional. Respondes en español, de forma concisa "
     "y directa: tu respuesta es la conversación.\n"
     "Para datos que no puedes conocer tienes una calculadora, el clima actual "
-    "mediante un servicio en línea y una búsqueda y listado de archivos en "
-    "data/. Fuera del clima, no tienes acceso a internet ni a noticias en "
-    "tiempo real. Si te preguntan por ellas, descríbelas; si te preguntan si "
-    "consultaste algo, di la verdad según el historial.\n"
+    "mediante un servicio en línea y la disponibilidad de bicis Ecobici por "
+    "estación. Fuera del clima y Ecobici, no tienes acceso a internet ni a "
+    "noticias en tiempo real, y no consultas archivos. Si te preguntan por "
+    "ellas, descríbelas; si te preguntan si consultaste algo, di la verdad "
+    "según el historial.\n"
     "Ejemplo:\n"
     "Usuario: hola\n"
     "Asistente: Hola, ¿en qué puedo ayudarte?\n"
@@ -76,8 +77,8 @@ TRABAJADOR_PROMPT: str = (
     "Calculadora: una expresión con + - * / ** % // y paréntesis. NO acepta "
     "nombres ni funciones: 'sqrt(16)' falla; escribe '16 ** 0.5'.\n"
     "Clima: el nombre de la ciudad.\n"
-    "Archivos: una sola palabra que aparezca en el texto para buscar, o pide "
-    "el listado si preguntan qué hay.\n"
+    "Ecobici: la palabra o número de estación tal como lo escribió el "
+    "usuario, sin inventar nombres.\n"
     "Si falta el dato (por ejemplo la ciudad), no lo inventes: responde en "
     "texto pidiéndolo.\n"
     "Si la petición no necesita ningún dato externo, responde en texto.\n"
@@ -93,10 +94,27 @@ def mensaje_rechazo(nombres: str) -> str:
 
 
 def mensaje_falta_dato(faltante: str) -> str:
-    """Fijo y terminal: el trabajador inventó un argumento."""
-    return f"Me falta {faltante} en tu mensaje: dímelo y lo consulto."
+    """Fijo y terminal: el trabajador inventó un argumento.
+
+    No basta con decir que falta: dice qué dar y con qué formato, para que
+    el reintento salga bien a la primera.
+    """
+    guia = {
+        "la ciudad": (
+            "Me falta la ciudad en tu mensaje: dime de qué ciudad quieres "
+            "el clima (p. ej. 'Madrid')."
+        ),
+        "la estación": (
+            "Me falta la estación en tu mensaje: dime el nombre o número que "
+            "ves en la cicloestación (p. ej. 'Reforma' o '448')."
+        ),
+    }
+    return guia.get(faltante, f"Me falta {faltante} en tu mensaje: dímelo y lo consulto.")
 
 
 def mensaje_fallo(motivo: str) -> str:
     """Fijo y terminal: se agotó el presupuesto de reintentos."""
-    return f"La herramienta falló dos veces ({motivo}). No puedo completar tu petición."
+    return (
+        f"La herramienta falló dos veces ({motivo}). "
+        "Intenta de nuevo en un momento o reformula la petición."
+    )
