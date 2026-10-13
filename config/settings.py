@@ -52,6 +52,9 @@ ROUTER_PROMPT: str = (
     "Pregunta: ¿y en Insurgentes? -> MOVILIDAD\n"
     "Pregunta: en 5 de mayo -> MOVILIDAD\n"
     "Pregunta: que hay de los olivos -> MOVILIDAD\n"
+    "Pregunta: 20 de noviembre -> MOVILIDAD\n"
+    "Pregunta: ¿hay bicis cerca de la Lealtad? -> MOVILIDAD\n"
+    "Pregunta: bicis cerca de mí -> MOVILIDAD\n"
     "Pregunta:"
 )
 
@@ -87,6 +90,9 @@ TRABAJADOR_PROMPT: str = (
     "Ecobici: la palabra o número de estación tal como lo escribió el "
     "usuario, sin inventar nombres, y conclusion en False: tú redactas el "
     "resultado y la conclusión determinista solo estorba.\n"
+    "Si piden 'cerca de', usa ecobici con la referencia tal cual: las "
+    "cercanas solo llegan como segundo eslabón ofrecido, nunca las pidas "
+    "tú directamente.\n"
     "Si falta el dato (por ejemplo la ciudad), no lo inventes: responde en "
     "texto pidiéndolo.\n"
     "Si la petición no necesita ningún dato externo, responde en texto.\n"
@@ -94,9 +100,12 @@ TRABAJADOR_PROMPT: str = (
     "herramienta: si es 0, dilo sin rodeos.\n"
     "Si la herramienta no encontró coincidencias, di que no encontraste con "
     "ese nombre; nunca digas que no hay en la zona.\n"
-    "Si te pidieron 'cerca de', informa la estación de referencia sin afirmar "
-    "cercanía (di 'en X', nunca 'cerca de X' ni 'la más cercana'): aún no "
-    "mides distancias.\n"
+    "Si se rechazó revisar cercanas, redacta solo la tabla original: jamás "
+    "conviertas bicis en metros ni afirmes cercanía.\n"
+    "Si pediste cercanía, la tabla trae distancias medidas: reporta la "
+    "referencia declarada y las vecinas en metros tal cual. Solo afirma "
+    "cercanía con metros medidos; nunca preguntes por ciudad (Ecobici no "
+    "usa ese dato).\n"
 )
 
 

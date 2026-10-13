@@ -35,6 +35,16 @@ def _pedir_aprobacion(herramientas: list[dict]) -> str:
     return "aprobar" if respuesta in _SI else "rechazar"
 
 
+def _pedir_si_no(pregunta: str) -> str:
+    """Pregunta fija del grafo (p. ej. ofrecer el segundo eslabón)."""
+    print(f"\n❓  {pregunta}")
+    try:
+        respuesta = input("   [s/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return "no"
+    return "si" if respuesta in _SI else "no"
+
+
 def _emitir(payload) -> None:
     """Avanza el grafo imprimiendo tokens y respondiendo a las aprobaciones.
 
@@ -56,7 +66,7 @@ def _emitir(payload) -> None:
                 nodo_actual = nodo
             if nodo in ("hablador", "trabajador") and chunk.content:
                 print(chunk.content, end="", flush=True)
-            elif nodo in ("approve", "fallo", "tools") and chunk.content:
+            elif nodo in ("approve", "fallo", "resumir", "tools") and chunk.content:
                 fijos[nodo] = chunk.content
         _volcar_fijos(fijos)
 
@@ -65,7 +75,11 @@ def _emitir(payload) -> None:
             break
 
         pendientes = [i for task in snapshot.tasks for i in task.interrupts]
-        payload = Command(resume=_pedir_aprobacion(pendientes[0].value["herramientas"]))
+        valor = pendientes[0].value
+        if "herramientas" in valor:
+            payload = Command(resume=_pedir_aprobacion(valor["herramientas"]))
+        else:
+            payload = Command(resume=_pedir_si_no(valor["pregunta"]))
 
     print()
 

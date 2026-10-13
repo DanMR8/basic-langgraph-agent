@@ -7,7 +7,10 @@ from agent.nodes import (
     approve,
     fallo,
     hablador,
+    ofrecer,
+    resumir,
     route_after_approval,
+    route_ofrecer,
     route_router,
     route_tools,
     route_trabajador,
@@ -26,6 +29,8 @@ def build_agent(checkpointer=None):
         router -> trabajador -> approve -> tools -> trabajador (bucle ReAct)
         En el bucle: error con presupuesto -> reintenta; agotado -> fallo;
         ok -> el trabajador redacta. Rechazo o dato inventado -> fijo -> END.
+        Si `ecobici` trae 3 bicis o menos en alguna: ofrecer -> (sí) tools
+        con `ecobici_cercanas` (ya autorizado) -> trabajador; (no) redacta.
 
     El router decide; el hablador no tiene herramientas vinculadas; el
     trabajador solo ve las de su ruta. Lo terminal es siempre un mensaje
@@ -41,6 +46,8 @@ def build_agent(checkpointer=None):
     workflow.add_node("trabajador", trabajador)
     workflow.add_node("approve", approve)
     workflow.add_node("tools", run_tools)
+    workflow.add_node("ofrecer", ofrecer)
+    workflow.add_node("resumir", resumir)
     workflow.add_node("fallo", fallo)
 
     workflow.add_edge(START, "router")
@@ -64,9 +71,16 @@ def build_agent(checkpointer=None):
     workflow.add_conditional_edges(
         "tools",
         route_tools,
-        {"trabajador": "trabajador", "fallo": "fallo"},
+        {"trabajador": "trabajador", "fallo": "fallo", "ofrecer": "ofrecer", "resumir": "resumir"},
+    )
+    # El "sí" ya autorizó esa consulta: va directo a ejecutar.
+    workflow.add_conditional_edges(
+        "ofrecer",
+        route_ofrecer,
+        {"tools": "tools", "trabajador": "trabajador"},
     )
     workflow.add_edge("fallo", END)
+    workflow.add_edge("resumir", END)
 
     return workflow.compile(checkpointer=checkpointer)
 

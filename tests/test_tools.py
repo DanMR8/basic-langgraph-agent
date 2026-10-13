@@ -10,7 +10,7 @@ import urllib.request
 
 import pytest
 
-from agent.tools import calculator, ecobici, search_files
+from agent.tools import calculator, ecobici, ecobici_cercanas, search_files
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Calculadora
@@ -264,3 +264,99 @@ class TestEcobici:
 
         monkeypatch.setattr(urllib.request, "urlopen", rota)
         assert ecobici.invoke({"estacion": "reforma"}).startswith("Error:")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Ecobici cercanas (mismo mock de red, con coordenadas)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+INFO_CERCA = {
+    "data": {
+        "stations": [
+            {"station_id": "0", "name": "Lealtad - Toluca", "short_name": "0",
+             "lat": 19.4340, "lon": -99.1900},
+            {"station_id": "1", "name": "Lealtad - Referencia", "short_name": "1",
+             "lat": 19.4300, "lon": -99.1900},
+            {"station_id": "2", "name": "Vecina Norte", "short_name": "2",
+             "lat": 19.4330, "lon": -99.1900},
+            {"station_id": "3", "name": "Cerrada Cerca", "short_name": "3",
+             "lat": 19.4310, "lon": -99.1900},
+            {"station_id": "4", "name": "Vacía Cerca", "short_name": "4",
+             "lat": 19.4320, "lon": -99.1900},
+            {"station_id": "5", "name": "Lejos Con Bicis", "short_name": "5",
+             "lat": 19.4500, "lon": -99.1900},
+            {"station_id": "6", "name": "Otra Lealtad Sur", "short_name": "6",
+             "lat": 19.4290, "lon": -99.1900},
+        ]
+    }
+}
+
+ESTADO_CERCA = {
+    "last_updated": 1700000000,
+    "data": {
+        "stations": [
+            {"station_id": "0", "num_bikes_available": 0, "num_docks_available": 9,
+             "is_renting": 1, "is_returning": 1},
+            {"station_id": "1", "num_bikes_available": 5, "num_docks_available": 5,
+             "is_renting": 1, "is_returning": 1},
+            {"station_id": "2", "num_bikes_available": 7, "num_docks_available": 3,
+             "is_renting": 1, "is_returning": 1},
+            {"station_id": "3", "num_bikes_available": 9, "num_docks_available": 9,
+             "is_renting": 0, "is_returning": 0},
+            {"station_id": "4", "num_bikes_available": 0, "num_docks_available": 9,
+             "is_renting": 1, "is_returning": 1},
+            {"station_id": "5", "num_bikes_available": 9, "num_docks_available": 9,
+             "is_renting": 1, "is_returning": 1},
+            {"station_id": "6", "num_bikes_available": 2, "num_docks_available": 8,
+             "is_renting": 1, "is_returning": 1},
+        ]
+    },
+}
+
+
+@pytest.fixture
+def gbfs_cerca(monkeypatch):
+    def falsa(peticion, timeout=None):
+        url = peticion.full_url if hasattr(peticion, "full_url") else peticion
+        nombre = url.rsplit("/", 1)[-1].replace(".json", "")
+        return _Respuesta(
+            {"station_information": INFO_CERCA, "station_status": ESTADO_CERCA}[nombre]
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", falsa)
+
+
+class TestEcobiciCercanas:
+    def test_vecinas_ordenadas_y_referencia_a_cero(self, gbfs_cerca):
+        salida = ecobici_cercanas.invoke({"estacion": "lealtad"})
+        assert "- Referencia: Lealtad - Referencia (1), con 5 bicis" in salida
+        assert "la de más bicis entre 3 coincidencia(s)" in salida
+        assert salida.index("| 111 m |") < salida.index("| 334 m |")
+        assert "Vecina Norte" in salida and "Otra Lealtad Sur" in salida
+
+    def test_referencia_no_se_lista_como_hallazgo(self, gbfs_cerca):
+        salida = ecobici_cercanas.invoke({"estacion": "lealtad"})
+        assert "| Lealtad - Referencia (1) | 0 m |" not in salida
+
+    def test_referencia_con_bicis_sin_vecinas(self, gbfs_cerca):
+        salida = ecobici_cercanas.invoke({"estacion": "norte", "radio_m": 50})
+        assert "Sin otras estaciones con bicis en 50 m." in salida
+
+    def test_excluye_cerrada_vacia_y_lejana(self, gbfs_cerca):
+        salida = ecobici_cercanas.invoke({"estacion": "lealtad"})
+        assert "Cerrada Cerca" not in salida
+        assert "Vacía Cerca" not in salida
+        assert "Lejos Con Bicis" not in salida
+
+    def test_sin_bicis_en_radio(self, gbfs_cerca):
+        salida = ecobici_cercanas.invoke({"estacion": "vacia", "radio_m": 100})
+        assert "No hay bicis en 100 m alrededor" in salida
+
+    def test_radio_invalido_es_error(self, gbfs_cerca):
+        assert ecobici_cercanas.invoke({"estacion": "lealtad", "radio_m": 0}).startswith("Error:")
+        assert ecobici_cercanas.invoke({"estacion": "lealtad", "radio_m": -5}).startswith("Error:")
+
+    def test_sin_referencia_guia(self, gbfs_cerca):
+        salida = ecobici_cercanas.invoke({"estacion": "zzz"})
+        assert "No encontré estación" in salida and "calle donde está" in salida

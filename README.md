@@ -8,6 +8,7 @@ Agente conversacional en español con herramientas, construido con **LangGraph**
 
 - Conversa en español de forma directa y concisa.
 - Consulta disponibilidad de bicis **Ecobici en tiempo real** (más calculadora y clima actual) clasificando cada turno.
+- Si hay pocas bicis, te ofrece revisar estaciones cercanas antes de cerrar.
 - **Pide tu autorización antes de ejecutar** cualquier herramienta, mostrándote qué va a hacer y con qué argumentos.
 - Si rechazas o algo falla, lo dice claramente y el turno termina sin inventar resultados.
 - Recuerda la conversación dentro de la sesión.
@@ -17,6 +18,7 @@ Agente conversacional en español con herramientas, construido con **LangGraph**
 | Herramienta | Descripción |
 |---|---|
 | `ecobici` | Bicis y espacios libres por cicloestación (CDMX, tiempo real, sin key) |
+| `ecobici_cercanas` | Bicis disponibles cerca de una estación (radio 1 km) |
 | `calculator` | Aritmética segura (sin ejecutar código) |
 | `get_weather` | Clima actual de una ciudad |
 

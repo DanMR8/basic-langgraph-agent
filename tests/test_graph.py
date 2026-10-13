@@ -1,4 +1,4 @@
-"""Tests del grafo: router, rama texto, ReAct con gate humano y reintentos.
+﻿"""Tests del grafo: router, rama texto, ReAct con gate humano y reintentos.
 
 Usan un LLM falso (ver `conftest.py`), así que la suite corre sin Ollama. Las
 colas vacías significan "este nodo no debe hablar": el doble falla si lo
@@ -11,7 +11,14 @@ from langgraph.errors import GraphRecursionError
 from langgraph.types import Command
 
 from agent.graph import agent
-from agent.nodes import _es_error, _pide_ubicacion, _rescatar_llamada, route_router
+from agent.nodes import (
+    _es_error,
+    _min_bicis,
+    _pide_ubicacion,
+    _rescatar_llamada,
+    _resumen_cercanas,
+    route_router,
+)
 from agent.state import AgentState
 from agent.tools import TOOLS, list_files
 from config.settings import (
@@ -19,7 +26,8 @@ from config.settings import (
     TEMPERATURA_ROUTER,
     TEMPERATURA_TRABAJADOR,
 )
-from tests.conftest import pide_herramienta, responde
+from tests.conftest import mock_gbfs, pide_herramienta, responde
+from tests.test_tools import ESTADO_CERCA, INFO_CERCA
 
 
 def textos_ai(grafo, cfg) -> list[str]:
@@ -43,6 +51,8 @@ def test_nodos_del_grafo():
         "trabajador",
         "approve",
         "tools",
+        "ofrecer",
+        "resumir",
         "fallo",
         "__end__",
     }
@@ -53,6 +63,7 @@ def test_herramientas_expuestas():
         "calculator",
         "get_weather",
         "ecobici",
+        "ecobici_cercanas",
     }
 
 
@@ -175,8 +186,19 @@ def test_ciudad_respaldada_si_pide_permiso(montar_grafo):
     assert grafo.get_state(cfg).next == ("approve",)
 
 
+def test_cercanas_respaldada_pide_permiso(montar_grafo):
+    grafo, cfg = montar_grafo(
+        router="MOVILIDAD",
+        trabaja=[pide_herramienta("ecobici_cercanas", {"estacion": "lealtad"})],
+    )
+    grafo.invoke(
+        {"messages": [HumanMessage(content="bicis cerca de la lealtad")]}, config=cfg
+    )
+    assert grafo.get_state(cfg).next == ("approve",)
+
+
 def test_query_normalizada_con_respaldo(montar_grafo):
-    """"lealtad" respalda la petición aunque el nombre completo sea largo."""
+    """La palabra corta respalda aunque el nombre completo sea largo."""
     grafo, cfg = montar_grafo(
         router="MOVILIDAD",
         trabaja=[
@@ -285,8 +307,110 @@ def test_list_files_muestra_sample():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Rescate: JSON escrito como texto se convierte en llamada real
+# Oferta del segundo eslabón
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("texto", "esperado"),
+    [
+        ("| A (1) | 11 | 5 | abierta |\n| B (2) | 0 | 3 | abierta |", 0),
+        ("| A (1) | 11 | 5 | abierta |", 11),
+        ("sin tabla aquí", None),
+        ("", None),
+    ],
+)
+def test_min_bicis(texto, esperado):
+    assert _min_bicis(texto) == esperado
+
+
+@pytest.mark.parametrize(
+    ("texto", "esperado"),
+    [
+        (
+            "Ecobici cerca de 'x':\n- Referencia: Base (9), con 4 bicis.\n| A (1) | 0 m | 5 | 5 |",
+            "Cerca de Base (9): lo mejor es A, 5 bicis a 0 m.",
+        ),
+        ("sin tabla aquí", None),
+        ("", None),
+    ],
+)
+def test_resumen_cercanas(texto, esperado):
+    assert _resumen_cercanas(texto) == esperado
+
+
+def test_oferta_si_redacta_determinista(montar_grafo, monkeypatch):
+    """Aceptada: cercanas -> resumen fijo, el trabajador no redacta."""
+    mock_gbfs(monkeypatch, INFO_CERCA, ESTADO_CERCA)
+    grafo, cfg = montar_grafo(
+        router="MOVILIDAD",
+        trabaja=[pide_herramienta("ecobici", {"estacion": "lealtad"})],
+    )
+    grafo.invoke({"messages": [HumanMessage(content="bicis en lealtad?")]}, config=cfg)
+    grafo.invoke(Command(resume="aprobar"), config=cfg)
+    assert grafo.get_state(cfg).next == ("ofrecer",)
+    grafo.invoke(Command(resume="si"), config=cfg)
+
+    assert grafo.get_state(cfg).next == ()
+    assert textos_ai(grafo, cfg) == [
+        "Cerca de Lealtad - Referencia (1): lo mejor es Otra Lealtad Sur, 2 bicis a 111 m."
+    ]
+
+
+def test_oferta_no_redacta_original(montar_grafo, monkeypatch):
+    mock_gbfs(monkeypatch, INFO_CERCA, ESTADO_CERCA)
+    grafo, cfg = montar_grafo(
+        router="MOVILIDAD",
+        trabaja=[
+            pide_herramienta("ecobici", {"estacion": "lealtad"}),
+            responde("Con 0 te alcanza."),
+        ],
+    )
+    grafo.invoke({"messages": [HumanMessage(content="bicis en lealtad?")]}, config=cfg)
+    grafo.invoke(Command(resume="aprobar"), config=cfg)
+    assert grafo.get_state(cfg).next == ("ofrecer",)
+    grafo.invoke(Command(resume="no"), config=cfg)
+
+    assert grafo.get_state(cfg).next == ()
+    assert textos_ai(grafo, cfg) == ["Con 0 te alcanza."]
+
+
+def test_sin_oferta_si_hay_bicis(montar_grafo, monkeypatch):
+    mock_gbfs(monkeypatch, INFO_CERCA, ESTADO_CERCA)
+    grafo, cfg = montar_grafo(
+        router="MOVILIDAD",
+        trabaja=[
+            pide_herramienta("ecobici", {"estacion": "norte"}),
+            responde("Listo."),
+        ],
+    )
+    grafo.invoke({"messages": [HumanMessage(content="bicis en norte?")]}, config=cfg)
+    grafo.invoke(Command(resume="aprobar"), config=cfg)
+
+    assert grafo.get_state(cfg).next == ()
+    assert textos_ai(grafo, cfg) == ["Listo."]
+
+
+def test_resumen_sin_parse_cae_al_trabajador(montar_grafo, monkeypatch):
+    """Si la tabla no parsea, redacta el trabajador como antes."""
+    from agent import nodes as _n
+
+    mock_gbfs(monkeypatch, INFO_CERCA, ESTADO_CERCA)
+    monkeypatch.setattr(
+        _n, "_resumen_cercanas", lambda texto: None
+    )
+    grafo, cfg = montar_grafo(
+        router="MOVILIDAD",
+        trabaja=[
+            pide_herramienta("ecobici", {"estacion": "lealtad"}),
+            responde("Lo resumo yo."),
+        ],
+    )
+    grafo.invoke({"messages": [HumanMessage(content="bicis en lealtad?")]}, config=cfg)
+    grafo.invoke(Command(resume="aprobar"), config=cfg)
+    grafo.invoke(Command(resume="si"), config=cfg)
+
+    assert textos_ai(grafo, cfg) == ["Lo resumo yo."]
 
 
 def test_rescatar_llamada_valida():
@@ -401,8 +525,34 @@ def test_backstop_descarta_frase_con_bicis(montar_grafo):
     ]
 
 
+def test_typo_del_trabajador_si_tiene_respaldo(montar_grafo):
+    """Corrige "noviembvre" a "noviembre": difuso, no verbatim."""
+    grafo, cfg = montar_grafo(
+        router="MOVILIDAD",
+        trabaja=[pide_herramienta("ecobici", {"estacion": "20 de noviembre"})],
+    )
+    grafo.invoke(
+        {"messages": [HumanMessage(content="me encuentro en 20 de noviembvre")]},
+        config=cfg,
+    )
+    assert grafo.get_state(cfg).next == ("approve",)
+
+
+def test_relleno_sin_palabras_utiles_no_respalda(montar_grafo):
+    grafo, cfg = montar_grafo(
+        router="MOVILIDAD",
+        trabaja=[pide_herramienta("ecobici", {"estacion": "cerca de"})],
+        frase=[responde("No tengo acceso a tu ubicación.")],
+    )
+    grafo.invoke(
+        {"messages": [HumanMessage(content="hay bicis cerca de mi?")]}, config=cfg
+    )
+    assert grafo.get_state(cfg).next == ()
+    assert textos_ai(grafo, cfg)[0].startswith("No tengo acceso a tu ubicación.")
+
+
 def test_fragmento_corto_no_respalda_aunque_case(montar_grafo):
-    """"mi" casa con "de mi" por subcadena: el mínimo de 3 lo bloquea."""
+    """"mi" es parada: sin palabras útiles no hay respaldo."""
     grafo, cfg = montar_grafo(
         router="MOVILIDAD",
         trabaja=[pide_herramienta("ecobici", {"estacion": "mi"})],

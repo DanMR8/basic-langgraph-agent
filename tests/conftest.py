@@ -33,8 +33,40 @@ class FakeLLM:
         return self.responses.pop(0)
 
     def bind_tools(self, tools):
-        """El trabajador del prototipo vincula según ruta; el doble lo ignora."""
+        """El trabajador vincula según ruta; el doble lo ignora."""
         return self
+
+
+class RespuestaGBFS:
+    """Doble de `urlopen` para herramientas con red (devuelve JSON fijo)."""
+
+    def __init__(self, datos):
+        import json
+
+        self._crudo = json.dumps(datos).encode()
+
+    def read(self):
+        return self._crudo
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def mock_gbfs(monkeypatch, info: dict, estado: dict) -> None:
+    """Sirve `info`/`estado` según el feed pedido en la URL."""
+    import urllib.request
+
+    def falsa(peticion, timeout=None):
+        url = peticion.full_url if hasattr(peticion, "full_url") else peticion
+        nombre = url.rsplit("/", 1)[-1].replace(".json", "")
+        return RespuestaGBFS(
+            {"station_information": info, "station_status": estado}[nombre]
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", falsa)
 
 
 def pide_herramienta(nombre: str, args: dict, call_id: str = "call_1") -> AIMessage:

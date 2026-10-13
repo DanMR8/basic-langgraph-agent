@@ -2,6 +2,7 @@
 
 import ast
 import json
+import math
 import operator
 import unicodedata
 import urllib.request
@@ -237,6 +238,128 @@ def _casa(estacion: dict, clave: str) -> bool:
     return clave in _normaliza(texto)
 
 
+def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Distancia en metros entre dos puntos (fórmula haversiana)."""
+    radio = 6371000.0
+    d_lat = math.radians(lat2 - lat1)
+    d_lon = math.radians(lon2 - lon1)
+    a = (
+        math.sin(d_lat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(d_lon / 2) ** 2
+    )
+    return 2 * radio * math.asin(math.sqrt(a))
+
+
+def _coords(estacion: dict) -> tuple | None:
+    try:
+        return float(estacion["lat"]), float(estacion["lon"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _id_num(estacion: dict) -> int:
+    """Primer número del id ("192-193" -> 192); lo no numérico va al final."""
+    primero = str(estacion.get("station_id", "")).split("-")[0]
+    return int(primero) if primero.isdigit() else 10**9
+
+
+@tool
+def ecobici_cercanas(estacion: str, radio_m: int = 1000) -> str:
+    """Bicis disponibles cerca de una estación de referencia, en tiempo real.
+
+    Args:
+        estacion: palabra o número tal como lo escribió el usuario
+            ("lealtad", "710"). Si casa con varias, se toma la primera y se
+            declara cuál.
+        radio_m: radio en metros. Siempre 1000; no lo cambies.
+    """
+    import time
+
+    if isinstance(radio_m, bool) or not isinstance(radio_m, int) or radio_m <= 0:
+        return "Error: radio en metros, entero mayor que 0."
+    clave = _normaliza(estacion)
+    if not clave:
+        return "Error: dime la calle o número de referencia."
+    try:
+        info = _gbfs("station_information")["data"]["stations"]
+        estado = _gbfs("station_status")
+    except Exception as e:
+        return f"Error: no pude consultar Ecobici: {e}"
+
+    candidatas = [s for s in info if _casa(s, clave)]
+    if not candidatas:
+        return (
+            f"- No encontré estación con '{estacion}'.\n"
+            "- Prueba con la calle donde está (p. ej. 'Reforma', "
+            "'20 de Noviembre' o 'Insurgentes') o el número de la cicloestación."
+        )
+    por_id = {e["station_id"]: e for e in estado["data"]["stations"]}
+    # Referencia: la de más bicis entre las que casan (desempate: id menor).
+    # Se declara con el criterio a la vista y no se lista como hallazgo:
+    # presentarla a 0 m como "la más cercana" era redundante y elegir por
+    # orden del feed parecía arbitrario.
+    ref = max(
+        candidatas,
+        key=lambda s: (
+            por_id.get(s["station_id"], {}).get("num_bikes_available", 0),
+            -_id_num(s),
+        ),
+    )
+    punto = _coords(ref)
+    if punto is None:
+        return "Error: la referencia no trae coordenadas."
+
+    bicis_ref = por_id.get(ref["station_id"], {}).get("num_bikes_available", 0)
+    nombre_ref = f"{ref.get('name')} ({ref.get('short_name')})"
+    bicis_txt = "1 bici" if bicis_ref == 1 else f"{bicis_ref} bicis"
+    linea_ref = (
+        f"- Referencia: {nombre_ref}, con {bicis_txt}: "
+        f"la de más bicis entre {len(candidatas)} coincidencia(s) con '{estacion}'."
+    )
+    vecinas = []
+    for s in info:
+        if s["station_id"] == ref["station_id"]:
+            continue
+        lugar = _coords(s)
+        if lugar is None:
+            continue
+        e = por_id.get(s["station_id"], {})
+        d = _haversine_m(punto[0], punto[1], lugar[0], lugar[1])
+        if e.get("is_renting", 1) and e.get("num_bikes_available", 0) > 0 and d <= radio_m:
+            vecinas.append((d, s, e))
+    vecinas.sort(key=lambda t: t[0])
+
+    ts = estado.get("last_updated", 0)
+    edad = f" (dato de hace {int(time.time() - ts)}s)" if ts else ""
+    if not vecinas:
+        if bicis_ref > 0:
+            return (
+                f"Ecobici cerca de '{estacion}'{edad}:\n"
+                f"{linea_ref}\n"
+                f"- Sin otras estaciones con bicis en {radio_m} m."
+            )
+        return (
+            f"- No hay bicis en {radio_m} m alrededor de '{estacion}' "
+            f"(referencia: {nombre_ref}).\n"
+            "- Prueba con otra calle o número."
+        )
+    lineas = [
+        f"Ecobici cerca de '{estacion}'{edad}:",
+        linea_ref,
+        "| Estación | Distancia | Bicis | Espacios |",
+        "|---|---|---|---|",
+    ]
+    for d, s, e in vecinas[:_ECOBICI_MAXIMAS]:
+        lineas.append(
+            f"| {s.get('name')} ({s.get('short_name')}) | {int(round(d))} m "
+            f"| {e.get('num_bikes_available', '?')} "
+            f"| {e.get('num_docks_available', '?')} |"
+        )
+    return "\n".join(lineas)
+
+
 @tool
 def ecobici(estacion: str, conclusion: bool = False) -> str:
     """Disponibilidad de bicis Ecobici CDMX por estación, en tiempo real.
@@ -323,4 +446,4 @@ def ecobici(estacion: str, conclusion: bool = False) -> str:
 # search_files y list_files existen pero están inhabilitadas: la búsqueda en
 # archivos locales no es parte del producto. Se conservan el código y sus
 # tests por si se reactivan.
-TOOLS = [calculator, get_weather, ecobici]
+TOOLS = [calculator, get_weather, ecobici, ecobici_cercanas]

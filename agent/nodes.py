@@ -7,6 +7,7 @@ agotado) es un mensaje fijo, sin narración del LLM.
 """
 
 import ast
+import difflib
 import json
 import re
 from uuid import uuid4
@@ -17,7 +18,7 @@ from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 
 from agent.state import AgentState
-from agent.tools import TOOLS, calculator, ecobici, get_weather
+from agent.tools import TOOLS, _normaliza, calculator, ecobici, get_weather
 from config.settings import (
     FRASE_UBICACION_PROMPT,
     HABLADOR_PROMPT,
@@ -50,10 +51,39 @@ llm_hablador = _modelo(TEMPERATURA_HABLADOR)  # texto, sin herramientas
 llm_trabajador = _modelo(TEMPERATURA_TRABAJADOR)  # se vincula según ruta
 llm_frase = _modelo(TEMPERATURA_ROUTER)  # una frase acotada, con backstop
 
+# Palabras que no respaldan nada: están en casi cualquier mensaje y el
+# trabajador las usa como relleno ("cerca de", "mi"). Sin palabras útiles no
+# hay respaldo, aunque la subcadena case.
+_PARADA_RESPALDO = {
+    "de", "la", "el", "en", "y", "a", "mi", "mis", "tu", "tus", "su", "sus",
+    "cerca", "hay", "bici", "bicis", "estacion", "estaciones",
+    "cicloestacion", "clima", "tiempo", "ciudad", "cuanto", "cuanta", "es",
+    "son", "se", "del", "al", "los", "las", "una", "uno", "por", "para",
+    "que", "como", "donde", "esta", "estan", "tiene", "tienen",
+    "quiere", "saber", "dime", "favor", "porfavor",
+}
+
+
+def _utiles(valor: str) -> list[str]:
+    """Palabras del argumento que sí identifican algo (sin paradas)."""
+    return [
+        w
+        for w in _normaliza(valor).split()
+        if w not in _PARADA_RESPALDO and (len(w) >= 3 or w.isdigit())
+    ]
+
+
+def _parecido(palabra: str, candidatas: list[str]) -> bool:
+    """El trabajador puede corregir un typo ("noviembre"/"noviembvre")."""
+    return bool(difflib.get_close_matches(palabra, candidatas, n=1, cutoff=0.85))
+
+
 # Qué puede pedir el trabajador según la ruta que decidió el router.
 _HERRAMIENTAS_POR_RUTA = {
     "CALCULO": [calculator],
     "CLIMA": [get_weather],
+    # Cercanas NO está vinculada: solo llega como segundo eslabón vía `ofrecer`,
+    # nunca por decisión del trabajador.
     "MOVILIDAD": [ecobici],
 }
 
@@ -199,28 +229,32 @@ def approve(state: AgentState) -> dict:
 def _args_con_respaldo(calls: list, state: AgentState) -> tuple[bool, str]:
     """El argumento tiene que venir del mensaje del usuario, no del modelo.
 
-    Compara sin espacios ("langgraph" casa con "lang graph") porque el
-    trabajador puede normalizar el término. La calculadora queda fuera: su
-    expresión se deriva, no se cita. Mínimo 3 caracteres: fragmentos como
-    "mi" casarían con cualquier mensaje ("de mi") sin ser una referencia.
-    Limitación conocida: seguimientos como "¿y mañana?" sin ciudad no pasan;
-    el trabajador debe pedirla en texto.
+    Compara sin espacios y tolera typos del trabajador ("noviembre" casa con
+    "noviembvre"). La calculadora queda fuera: su expresión se deriva, no se
+    cita. Limitación conocida: seguimientos como "¿y mañana?" sin ciudad no
+    pasan; el trabajador debe pedirla en texto.
     """
     peticion = next(
         (m.content for m in reversed(state["messages"]) if m.type == "human"),
         "",
     )
     compacta = str(peticion or "").replace(" ", "").lower()
+    palabras = _normaliza(peticion).split()
 
     def respalda(valor: str) -> bool:
-        clave = str(valor or "").replace(" ", "").lower()
-        return len(clave) >= 3 and clave in compacta
+        utiles = _utiles(valor)
+        if not utiles:
+            return False
+        return all(
+            u in compacta or _parecido(u, palabras) for u in utiles
+        )
 
     # Qué argumento respalda cada herramienta (la calculadora queda fuera: su
     # expresión se deriva, no se cita).
     _RESPALDO_POR_TOOL = {
         "get_weather": ("city", "la ciudad"),
         "ecobici": ("estacion", "la estación"),
+        "ecobici_cercanas": ("estacion", "la estación"),
     }
     for c in calls:
         args = c.get("args", {}) or {}
@@ -313,12 +347,109 @@ def _es_error(mensaje) -> bool:
 
 
 def route_tools(state: AgentState) -> str:
-    """Error con presupuesto -> reintenta; sin presupuesto -> fijo; si no,
-    el trabajador redacta el resultado."""
-    if _es_error(state["messages"][-1]):
+    """Error con presupuesto -> reintenta; sin presupuesto -> fijo.
+
+    Si `ecobici` trajo alguna estación con 3 bicis o menos, se ofrece
+    revisar cercanas antes de redactar. El mínimo se lee de la tabla que la
+    propia herramienta genera; si no parsea, no se ofrece (fail-safe).
+
+    Las cercanas no las redacta el trabajador (medido: contradice la tabla
+    con "no encontré"): van a `resumir`, una línea determinista. Si no
+    parsea, cae al trabajador como antes.
+    """
+    ultimo = state["messages"][-1]
+    if _es_error(ultimo):
         if state.get("reintentos", 0) < REINTENTOS_MAXIMOS:
             return "trabajador"
         return "fallo"
+    if getattr(ultimo, "name", "") == "ecobici_cercanas":
+        contenido = str(getattr(ultimo, "content", "") or "")
+        return "resumir" if _resumen_cercanas(contenido) else "trabajador"
+    if getattr(ultimo, "name", "") == "ecobici":
+        minimo = _min_bicis(str(getattr(ultimo, "content", "") or ""))
+        if minimo is not None and minimo <= 3:
+            return "ofrecer"
+    return "trabajador"
+
+
+def _min_bicis(texto: str) -> int | None:
+    """Mínimo de la columna Bicis de la tabla; None si no hay tabla."""
+    valores = re.findall(r"^\|[^|]*\|\s*(\d+)\s*\|", texto, re.MULTILINE)
+    return min(map(int, valores)) if valores else None
+
+
+def _resumen_cercanas(texto: str) -> str | None:
+    """Una línea con lo mejor medido y desde dónde; None si no parsea."""
+    ref = re.search(r"- Referencia: (.+?), con \d+ bici", texto)
+    fila = re.search(
+        r"^\| (.+?) \((\d+)\) \| (\d+) m \| (\d+) \|", texto, re.MULTILINE
+    )
+    if not ref or not fila:
+        return None
+    nombre, _short, dist, bicis = fila.groups()
+    return (
+        f"Cerca de {ref.group(1)}: lo mejor es {nombre}, "
+        f"{bicis} bicis a {dist} m."
+    )
+
+
+def resumir(state: AgentState) -> dict:
+    """Cierra el segundo eslabón sin pasar por el trabajador."""
+    ultimo = state["messages"][-1]
+    texto = _resumen_cercanas(str(getattr(ultimo, "content", "") or ""))
+    return {"messages": [AIMessage(content=texto or "Revisa la tabla de arriba.")]}
+
+
+def _ultima_llamada(nombre: str, messages) -> dict:
+    """La tool_call más reciente a `nombre` (para reutilizar sus args)."""
+    for m in reversed(messages):
+        for tc in getattr(m, "tool_calls", None) or []:
+            if tc.get("name") == nombre:
+                return tc
+    return {}
+
+
+def ofrecer(state: AgentState) -> dict:
+    """Ofrece el segundo eslabón con pregunta fija y espera sí/no.
+
+    El "sí" autoriza esa consulta concreta: se construye la llamada a
+    `ecobici_cercanas` con la referencia ya dicha y va directo a `tools`,
+    sin segunda aprobación. El "no" deja el turno para que el trabajador
+    redacte lo ya consultado.
+    """
+    llamada = _ultima_llamada("ecobici", state["messages"])
+    x = str((llamada.get("args", {}) or {}).get("estacion", ""))
+    decision = interrupt(
+        {
+            "pregunta": (
+                "Hay estaciones con pocas bicis. ¿Reviso más estaciones "
+                f"cerca de '{x}'?"
+            ),
+            "tipo": "oferta_cercanas",
+        }
+    )
+    if str(decision or "").strip().lower() in {"si", "sí", "s", "yes", "y", "aprobar"}:
+        return {
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "ecobici_cercanas",
+                            "args": {"estacion": x, "radio_m": 1000},
+                            "id": f"oferta-{uuid4().hex[:8]}",
+                        }
+                    ],
+                )
+            ]
+        }
+    return {}
+
+
+def route_ofrecer(state: AgentState) -> str:
+    """Aceptada -> se ejecuta (ya autorizada); si no -> se redacta."""
+    if getattr(state["messages"][-1], "tool_calls", None):
+        return "tools"
     return "trabajador"
 
 
