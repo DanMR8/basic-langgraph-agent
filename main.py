@@ -1,5 +1,6 @@
 """CLI interactiva para chatear con el agente local."""
 
+import re
 import uuid
 
 from langchain_core.messages import HumanMessage
@@ -88,6 +89,8 @@ def _volcar_fijos(fijos: dict[str, str]) -> None:
     """Imprime los mensajes completos acumulados, cada uno una sola vez."""
     for nodo, texto in fijos.items():
         if nodo == "tools":
+            # La conclusión determinista es para el trabajador, no se muestra.
+            texto = re.sub(r"(?m)^- Conclusión: .*$\n?", "", texto).strip()
             print(f"\n   ⚙️  {texto}")
         else:
             print(texto, end="", flush=True)
