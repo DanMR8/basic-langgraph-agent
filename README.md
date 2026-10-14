@@ -4,7 +4,7 @@
 
 Agente conversacional en español con herramientas, construido con **LangGraph** y un **LLM local** (Ollama). Proyecto de muestra: consulta disponibilidad de bicis Ecobici en tiempo real, y además calcula y da el clima, siempre bajo aprobación humana, con streaming y memoria de sesión.
 
-<video src="https://github.com/user-attachments/assets/6856d162-a0d9-4c5d-9480-b195f61a6fb7" controls width="100%"></video>
+![Demo](assets/ss1.png)
 
 ## Qué hace
 
