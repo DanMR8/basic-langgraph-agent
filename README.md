@@ -4,7 +4,7 @@
 
 Agente conversacional en español con herramientas, construido con **LangGraph** y un **LLM local** (Ollama). Proyecto de muestra: consulta disponibilidad de bicis Ecobici en tiempo real, y además calcula y da el clima, siempre bajo aprobación humana, con streaming y memoria de sesión.
 
-![Demo](assets/se1.mp4)
+![Demo](https://github.com/user-attachments/assets/7c240d0e-8f92-4e34-baa9-21e48592457b)
 
 ## Qué hace
 
@@ -110,17 +110,22 @@ Tú › ¿dónde estoy?
                         │
 START ──► router ───────┤
                         │  herramienta
-                        └────────────────► trabajador ──► approve ──┬─► tools ──► trabajador
-                                                                   │                 (bucle acotado:
-                                                                   │                  error→reintenta,
-                                                                   │                  ok→redacta)
+                        └────────────────► trabajador ──► approve ──┬─► tools ──┬─► trabajador
+                                                                   │           │         (redacta / reintenta
+                                                                   │           │          con presupuesto)
+                                                                   │           ├─► ofrecer ──► tools ──► resumen
+                                                                   │           │     (s/n)      (2.º eslabón)
+                                                                   │           └─► fallo (sin reintentos)
                                                                    └── rechazo ──► respuesta fija
+```
 
 "dónde estoy" tiene rama propia (precisa con GPS, aproximada con IP):
 
+```
     trabajador ──► elegir ──┬─ precisa ──► geocodifica ──► respuesta
                              ├─ aproximada ──► approve ──► tools ──► respuesta
                              └─ rechazo ──► respuesta fija
+```
 
 El diseño separa tres responsabilidades que en un agente clásico van
 mezcladas:
@@ -135,6 +140,9 @@ mezcladas:
   espera aprobación humana, ejecuta y redacta. Solo ve las herramientas de su
   ruta y verifica que cada argumento venga del mensaje del usuario antes de
   molestar con la autorización.
+- **ofrecer / resumir / fallo** — Si hay pocas bicis, ofrece revisar cercanas
+  (el "sí" ya autoriza); el cierre del segundo eslabón es determinista y los
+  reintentos agotados terminan en mensaje fijo.
 
 Dos garantías estructurales, no promesas del prompt:
 
