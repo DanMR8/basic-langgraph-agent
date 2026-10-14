@@ -45,6 +45,11 @@ dev = [
     "ruff>=0.6.0",
 ]
 
+# GPS en escritorio Windows para el front (opcional, solo win32).
+gps = [
+    "winsdk>=1.0.0; sys_platform == 'win32'",
+]
+
 [project.urls]
 Homepage = "https://github.com/DanMR8/basic-langgraph-agent"
 Repository = "https://github.com/DanMR8/basic-langgraph-agent"

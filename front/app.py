@@ -1,6 +1,7 @@
 """Front en Flet. Uso: python -X utf8 -m front.app (con Ollama corriendo)."""
 
 import contextlib
+import datetime
 import re
 import threading
 import uuid
@@ -34,6 +35,8 @@ def main(page: ft.Page) -> None:
         FUENTE_TEXTO: "https://github.com/google/fonts/raw/main/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf",
     }
     page.theme = ft.Theme(font_family=FUENTE_TEXTO, color_scheme_seed=NARANJA)
+
+    ubi = {"on": False}
 
     def cristal(contenido: ft.Control, radio: int = 16) -> ft.Container:
         """Superficie glass: translúcida + blur + borde sutil."""
@@ -90,12 +93,41 @@ def main(page: ft.Page) -> None:
     )
     enviar = ft.IconButton(icon=ft.Icons.SEND, icon_color=FONDO, bgcolor=NARANJA)
     ocupado = ft.ProgressRing(visible=False, width=20, height=20, color=NARANJA)
+    ubi_btn = ft.IconButton(
+        icon=ft.Icons.LOCATION_OFF,
+        icon_color=CREMA,
+        tooltip="Ubicación precisa (apagada)",
+    )
+
+    def fijar_ubi(encendida: bool) -> None:
+        """Una sola fuente de verdad para el toggle, manual o por diálogo."""
+        ubi["on"] = encendida
+        ubi_btn.icon = ft.Icons.LOCATION_ON if encendida else ft.Icons.LOCATION_OFF
+        ubi_btn.icon_color = NARANJA if encendida else CREMA
+        ubi_btn.tooltip = (
+            "Ubicación precisa (encendida)"
+            if encendida
+            else "Ubicación precisa (apagada)"
+        )
+        page.update()
+
+    def al_ubi(_) -> None:
+        fijar_ubi(not ubi["on"])
+
+    ubi_btn.on_click = al_ubi
 
     def burbuja(texto: str, mia: bool) -> ft.Container:
         if mia:
             return ft.Container(
-                content=ft.Text(
-                    texto, selectable=True, color=FONDO, weight=ft.FontWeight.BOLD
+                content=ft.Markdown(
+                    texto,
+                    selectable=True,
+                    extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
+                    md_style_sheet=ft.MarkdownStyleSheet(
+                        p_text_style=ft.TextStyle(
+                            color=FONDO, weight=ft.FontWeight.BOLD
+                        ),
+                    ),
                 ),
                 bgcolor=NARANJA,
                 border_radius=12,
@@ -103,8 +135,15 @@ def main(page: ft.Page) -> None:
                 expand=8,
             )
         return ft.Container(
-            content=ft.Text(
-                texto, selectable=True, color=CREMA, weight=ft.FontWeight.BOLD
+            content=ft.Markdown(
+                texto,
+                selectable=True,
+                extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
+                md_style_sheet=ft.MarkdownStyleSheet(
+                    p_text_style=ft.TextStyle(
+                        color=CREMA, weight=ft.FontWeight.BOLD
+                    ),
+                ),
             ),
             bgcolor=ft.Colors.with_opacity(0.1, ft.Colors.WHITE),
             blur=ft.Blur(14, 14),
@@ -174,7 +213,10 @@ def main(page: ft.Page) -> None:
             if m.type == "ai" and not getattr(m, "tool_calls", None):
                 if str(m.content or "").strip():
                     chat.controls.append(fila_mensaje(str(m.content), mia=False))
-            elif m.type == "tool":
+            # El eco de ubicación ya es la respuesta: no duplicarlo aquí.
+            elif m.type == "tool" and not str(m.content or "").strip().startswith(
+                "Estás en"
+            ):
                 chat.controls.append(linea_herramienta(str(m.content)))
         page.update()
         return len(mensajes)
@@ -247,11 +289,151 @@ def main(page: ft.Page) -> None:
     def pedir_si_no(pregunta: str) -> str:
         return preguntar("Pregunta", [pregunta], False)
 
+    def _mapea_error_ubi(err: Exception) -> dict:
+        """Denegado/apagado/timeout según el error (mejor esfuerzo)."""
+        texto = f"{type(err).__name__}: {err}".lower()
+        if "denied" in texto or "permission" in texto or "denegad" in texto:
+            return {"estado": "denegado"}
+        if "disabled" in texto or "service" in texto or "off" in texto:
+            return {"estado": "apagado"}
+        return {"estado": "timeout"}
+
+    def _gps_directo() -> dict:
+        """Una fix de Windows; mapea todo a estados. Sin diálogo aquí."""
+        caja, evento = {}, threading.Event()
+
+        async def _localizar():
+            try:
+                from winsdk.windows.devices.geolocation import (
+                    GeolocationAccessStatus as Acceso,
+                )
+                from winsdk.windows.devices.geolocation import (
+                    Geolocator as WinGeo,
+                )
+
+                acceso = await WinGeo.request_access_async()
+                if acceso != Acceso.ALLOWED:
+                    # PositionStatus: 3=Disabled, 5=NotAvailable -> apagado;
+                    # lo demás (denegado por el usuario) -> denegado.
+                    try:
+                        estado_os = int(WinGeo().location_status)
+                    except Exception:  # noqa: BLE001 - sin estado, se asume denegado
+                        estado_os = -1
+                    caja["r"] = {
+                        "estado": "apagado" if estado_os in (3, 5) else "denegado"
+                    }
+                    return
+                pos = await WinGeo().get_geoposition_async(
+                    datetime.timedelta(minutes=5),
+                    datetime.timedelta(seconds=10),
+                )
+                if pos is None or pos.coordinate is None:
+                    caja["r"] = {"estado": "timeout"}
+                    return
+                caja["r"] = {
+                    "estado": "ok",
+                    "lat": pos.coordinate.latitude,
+                    "lon": pos.coordinate.longitude,
+                }
+            except ImportError:
+                caja["r"] = {"estado": "no_disponible"}
+            except Exception as e:  # noqa: BLE001 - se mapea a estado
+                caja["r"] = _mapea_error_ubi(e)
+            finally:
+                evento.set()
+
+        page.run_task(_localizar)
+        if not evento.wait(timeout=25):
+            return {"estado": "timeout"}
+        return caja.get("r", {"estado": "timeout"})
+
+    def pedir_ubicacion() -> dict:
+        """Resuelve el interrupt de ubicación: toggle, diálogo o GPS de Windows.
+
+        Sin control Flet de por medio (daba "Unknown control" en dev): se usa
+        la API de ubicación de Windows directo desde Python. Sin GPS solo
+        resuelve por WiFi si el servicio está encendido; si no, cae al fijo.
+        """
+        if not ubi["on"] and preguntar(
+            "Ubicación precisa",
+            ["El agente quiere tu ubicación para buscar estaciones cercanas."],
+            False,
+        ) != "si":
+            return {"estado": "denegado"}
+        # El "sí" (aquí o el toggle ya encendido) es consentimiento: el botón
+        # lo refleja para no mentir sobre el estado.
+        fijar_ubi(True)
+        return _gps_directo()
+
+    def pedir_respuesta_ubicacion() -> dict:
+        """Diálogo de 3 vías para "dónde estoy": precisa, IP o rechazo.
+
+        Con toggle encendido va directo a precisa (para eso es el toggle).
+        Si el GPS falla tras elegir precisa, cae a IP: la salida siempre dice
+        la fuente, así que no hay engaño.
+        """
+        if ubi["on"]:
+            eleccion = "precisa"
+        else:
+            eleccion = _dialogo_tres(
+                "Tu ubicación",
+                ["¿Cómo respondo dónde estás?"],
+                [("Precisa (GPS)", "precisa"), ("Aproximada (IP)", "ip")],
+            )
+            if eleccion is None:
+                return {"estado": "rechazado"}
+        if eleccion == "precisa":
+            gps = _gps_directo()
+            if gps.get("estado") == "ok":
+                return {
+                    "estado": "precisa",
+                    "lat": gps["lat"],
+                    "lon": gps["lon"],
+                }
+            return {"estado": "ip"}
+        return {"estado": "ip"}
+
+    def _dialogo_tres(
+        titulo: str, lineas: list[str], opciones: list[tuple[str, str]]
+    ) -> str | None:
+        """Como `preguntar` pero con N botones; None si cierra sin elegir."""
+        evento, caja = threading.Event(), {}
+
+        def responde(valor: str | None):
+            def _cerrar(_):
+                caja["r"] = valor
+                dlg.open = False
+                page.update()
+                evento.set()
+
+            return _cerrar
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            bgcolor=ft.Colors.with_opacity(0.92, FONDO),
+            title=ft.Text(titulo, font_family=FUENTE_TITULO, color=CREMA),
+            content=ft.Column(
+                [ft.Text(linea, selectable=True, color=CREMA) for linea in lineas],
+                tight=True,
+            ),
+            actions=[
+                ft.FilledButton(
+                    texto, on_click=responde(valor), bgcolor=NARANJA, color=FONDO
+                )
+                for texto, valor in opciones
+            ]
+            + [ft.TextButton("Rechazar", on_click=responde(None))],
+        )
+        page.show_dialog(dlg)
+        page.update()
+        with contextlib.suppress(Exception):
+            page.run_task(page.window.to_front)
+        evento.wait()
+        return caja.get("r")
+
     def turno(texto: str) -> None:
         try:
             vistos = len(agent.get_state(CONFIG).values.get("messages", []))
-            chat.controls.append(fila_mensaje(texto, mia=True))
-            page.update()
             payload: dict = {"messages": [HumanMessage(content=texto)]}
             while True:
                 agent.invoke(payload, config=CONFIG)
@@ -262,6 +444,10 @@ def main(page: ft.Page) -> None:
                 valor = [i for t in snap.tasks for i in t.interrupts][0].value
                 if "herramientas" in valor:
                     payload = Command(resume=pedir_aprobacion(valor["herramientas"]))
+                elif valor.get("tipo") == "ubicacion":
+                    payload = Command(resume=pedir_ubicacion())
+                elif valor.get("tipo") == "ubicacion_respuesta":
+                    payload = Command(resume=pedir_respuesta_ubicacion())
                 else:
                     payload = Command(resume=pedir_si_no(valor["pregunta"]))
         except Exception as e:  # noqa: BLE001 - el error se muestra en el chat
@@ -279,6 +465,7 @@ def main(page: ft.Page) -> None:
         entrada.value = ""
         enviar.disabled = True
         ocupado.visible = True
+        chat.controls.append(fila_mensaje(texto, mia=True))
         page.run_task(entrada.focus)
         page.update()
         page.run_thread(lambda: turno(texto))
@@ -296,7 +483,7 @@ def main(page: ft.Page) -> None:
                         [
                             cristal(
                                 ft.Text(
-                                    "Agente local — calculadora · clima · ecobici",
+                                    "Asistente del día: Ecobici, clima y algo más…",
                                     font_family=FUENTE_TITULO,
                                     weight=ft.FontWeight.BOLD,
                                     color=NARANJA,
@@ -307,7 +494,7 @@ def main(page: ft.Page) -> None:
                             expand=True,
                             padding=ft.Padding.symmetric(horizontal=4),
                         ),
-                            ft.Row([entrada, enviar, ocupado]),
+                            ft.Row([entrada, ubi_btn, enviar, ocupado]),
                         ],
                         expand=True,
                     ),

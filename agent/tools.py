@@ -5,6 +5,7 @@ import json
 import math
 import operator
 import unicodedata
+import urllib.parse
 import urllib.request
 
 from langchain_core.tools import tool
@@ -86,43 +87,168 @@ def calculator(expression: str) -> str:
         return f"Error: {e}"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 2. Clima (API pública wttr.in — sin API key)
-# ─────────────────────────────────────────────────────────────────────────────
+# wttr.in devuelve la condición en inglés cuando no trae `lang_es`. Tabla
+# cerrada con lo común: el trabajador no traduce términos climáticos con
+# fiabilidad (medido: "Cloudy" -> "despejado").
+_CLIMA_ES = {
+    "Clear": "despejado",
+    "Sunny": "soleado",
+    "Partly cloudy": "parcialmente nublado",
+    "Cloudy": "nublado",
+    "Overcast": "cubierto",
+    "Mist": "neblina",
+    "Fog": "niebla",
+    "Light rain": "lluvia ligera",
+    "Moderate rain": "lluvia moderada",
+    "Heavy rain": "lluvia fuerte",
+    "Light drizzle": "llovizna ligera",
+    "Thunderstorm": "tormenta",
+    "Light snow": "nieve ligera",
+    "Heavy snow": "nieve fuerte",
+}
+
+
+def _condicion_en_espanol(current: dict) -> str:
+    if "lang_es" in current:
+        return current["lang_es"][0]["value"]
+    original = str(current["weatherDesc"][0]["value"]).strip()
+    return _CLIMA_ES.get(original, original)
+
+
+def _formatea_clima(data: dict, titulo: str) -> str:
+    current = data["current_condition"][0]
+    temp_c = current["temp_C"]
+    feels_c = current["FeelsLikeC"]
+    desc = _condicion_en_espanol(current)
+    humidity = current["humidity"]
+    wind = current["windspeedKmph"]
+    return (
+        f"🌤️ {titulo}:\n"
+        f"  • Temperatura: {temp_c}°C (sensación {feels_c}°C)\n"
+        f"  • Condición: {desc}\n"
+        f"  • Humedad: {humidity}%\n"
+        f"  • Viento: {wind} km/h"
+    )
 
 @tool
-def get_weather(city: str) -> str:
-    """Devuelve el clima ACTUAL de una ciudad.
+def ubicacion() -> str:
+    """Ciudad aproximada donde estás, por IP (sin GPS).
 
-    Úsala solo cuando pregunten por el tiempo de una ciudad concreta. Para
-    cualquier otra pregunta, no la llames.
-
-    Args:
-        city: Nombre de la ciudad en inglés o español.
+    Úsala SOLO si preguntan dónde están, en qué ciudad están o cuál es su
+    ubicación. Es aproximada a nivel ciudad/zona, nunca una dirección.
     """
     try:
-        url = f"https://wttr.in/{city}?format=j1"
+        url = (
+            "http://ip-api.com/json/"
+            "?fields=status,message,country,regionName,city,lat,lon"
+        )
+        req = urllib.request.Request(url, headers={"User-Agent": "basic-langgraph-agent"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+        if data.get("status") != "success":
+            return f"No pude obtener tu ubicación: {data.get('message', 'sin motivo')}."
+        ciudad = data.get("city") or "?"
+        region = data.get("regionName") or "?"
+        pais = data.get("country") or "?"
+        return (
+            f"Estás en {ciudad}, {region} ({pais}), aproximado por IP. "
+            "No es tu dirección exacta."
+        )
+    except Exception as e:
+        return f"No pude obtener tu ubicación: {e}"
+
+
+@tool
+def geocodificar_inverso(lat: float, lon: float) -> str:
+    """Colonia y alcaldía de unas coordenadas (Nominatim, sin key).
+
+    Nunca la pide el trabajador: solo la construye el flujo de ubicación
+    con coords ya autorizadas. Responde en frase completa para eco directo.
+    """
+    try:
+        if (
+            isinstance(lat, bool)
+            or isinstance(lon, bool)
+            or not isinstance(lat, (int, float))
+            or not isinstance(lon, (int, float))
+            or not (-90 <= lat <= 90)
+            or not (-180 <= lon <= 180)
+        ):
+            return "Error: coordenadas inválidas."
+        url = (
+            "https://nominatim.openstreetmap.org/reverse"
+            f"?lat={lat}&lon={lon}&format=json&accept-language=es"
+        )
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "basic-langgraph-agent/0.1"}
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+        a = data.get("address", {}) or {}
+        zona = a.get("neighbourhood") or a.get("road")
+        ciudad = (
+            a.get("borough") or a.get("city") or a.get("state")
+        )
+        if zona and ciudad:
+            return f"Estás en {zona}, {ciudad} (ubicación precisa)."
+        if ciudad:
+            return f"Estás en {ciudad} (ubicación precisa)."
+        if zona:
+            return f"Estás en {zona} (ubicación precisa)."
+        return "Estás por aquí (ubicación precisa)."
+    except Exception as e:
+        return f"Error: no pude geocodificar: {e}"
+
+
+@tool
+def clima_aqui() -> str:
+    """Clima ACTUAL de tu ubicación aproximada (por IP, sin ciudad).
+
+    Úsala SOLO si piden el clima aquí, donde están o en su ubicación, o se
+    entiende que lo quieren donde se encuentran. Si nombran una ciudad,
+    usa `get_weather` con esa ciudad.
+    """
+    try:
+        url = "https://wttr.in/?format=j1"
         req = urllib.request.Request(url, headers={"User-Agent": "curl"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
+        lugar = _nombre_ubicacion()
+        return _formatea_clima(data, f"Clima en {lugar} (ubicación aproximada)")
+    except Exception as e:
+        return f"No pude obtener el clima de tu ubicación: {e}"
 
-        current = data["current_condition"][0]
-        temp_c = current["temp_C"]
-        feels_c = current["FeelsLikeC"]
-        if "lang_es" in current:
-            desc = current["lang_es"][0]["value"]
-        else:
-            desc = current["weatherDesc"][0]["value"]
-        humidity = current["humidity"]
-        wind = current["windspeedKmph"]
 
-        return (
-            f"🌤️ Clima en {city.title()}:\n"
-            f"  • Temperatura: {temp_c}°C (sensación {feels_c}°C)\n"
-            f"  • Condición: {desc}\n"
-            f"  • Humedad: {humidity}%\n"
-            f"  • Viento: {wind} km/h"
+def _nombre_ubicacion() -> str:
+    """Ciudad que wttr.in asigna a tu IP; "por aquí" si no responde."""
+    try:
+        req = urllib.request.Request(
+            "https://wttr.in/?format=%l", headers={"User-Agent": "curl"}
         )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            nombre = resp.read().decode().strip()
+        return nombre or "por aquí"
+    except Exception:
+        return "por aquí"
+
+
+@tool
+def get_weather(city: str) -> str:
+    """Devuelve el clima ACTUAL de un lugar concreto (obligatorio).
+
+    Úsala cuando nombren el lugar: ciudad, alcaldía o colonia, tal cual.
+    Si piden el clima aquí, donde están o en su ubicación sin nombrar
+    lugar, usa `clima_aqui` en su lugar.
+
+    Args:
+        city: Nombre del lugar en inglés o español.
+    """
+    try:
+        url = f"https://wttr.in/{urllib.parse.quote(city.strip())}?format=j1"
+        req = urllib.request.Request(url, headers={"User-Agent": "curl"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+        return _formatea_clima(data, f"Clima en {city.strip().title()}")
     except Exception as e:
         return f"No pude obtener el clima de '{city}': {e}"
 
@@ -259,6 +385,22 @@ def _coords(estacion: dict) -> tuple | None:
         return None
 
 
+def _valida_centro(lat, lon) -> tuple | None:
+    """Coords válidas o None (también si solo viene una)."""
+    if lat is None and lon is None:
+        return None
+    if (
+        isinstance(lat, bool)
+        or isinstance(lon, bool)
+        or not isinstance(lat, (int, float))
+        or not isinstance(lon, (int, float))
+        or not (-90 <= lat <= 90)
+        or not (-180 <= lon <= 180)
+    ):
+        return "invalido"
+    return float(lat), float(lon)
+
+
 def _id_num(estacion: dict) -> int:
     """Primer número del id ("192-193" -> 192); lo no numérico va al final."""
     primero = str(estacion.get("station_id", "")).split("-")[0]
@@ -266,21 +408,31 @@ def _id_num(estacion: dict) -> int:
 
 
 @tool
-def ecobici_cercanas(estacion: str, radio_m: int = 1000) -> str:
-    """Bicis disponibles cerca de una estación de referencia, en tiempo real.
+def ecobici_cercanas(
+    estacion: str = "", lat: float | None = None, lon: float | None = None,
+    radio_m: int = 1000,
+) -> str:
+    """Bicis disponibles cerca de un punto, en tiempo real.
+
+    Dos modos excluyentes: por palabra (`estacion`, contra nombres) o por
+    centro directo (`lat`/`lon`, para la ubicación del usuario). Con ambos,
+    manda el centro directo.
 
     Args:
-        estacion: palabra o número tal como lo escribió el usuario
-            ("lealtad", "710"). Si casa con varias, se toma la primera y se
-            declara cuál.
+        estacion: palabra o número tal como lo escribió el usuario.
+        lat: latitud del centro (-90..90). Solo la pone el flujo de
+            ubicación, nunca el trabajador.
+        lon: longitud del centro (-180..180). Igual que `lat`.
         radio_m: radio en metros. Siempre 1000; no lo cambies.
     """
     import time
 
     if isinstance(radio_m, bool) or not isinstance(radio_m, int) or radio_m <= 0:
         return "Error: radio en metros, entero mayor que 0."
-    clave = _normaliza(estacion)
-    if not clave:
+    centro = _valida_centro(lat, lon)
+    if centro == "invalido":
+        return "Error: coordenadas inválidas."
+    if centro is None and not _normaliza(estacion):
         return "Error: dime la calle o número de referencia."
     try:
         info = _gbfs("station_information")["data"]["stations"]
@@ -288,39 +440,49 @@ def ecobici_cercanas(estacion: str, radio_m: int = 1000) -> str:
     except Exception as e:
         return f"Error: no pude consultar Ecobici: {e}"
 
-    candidatas = [s for s in info if _casa(s, clave)]
-    if not candidatas:
-        return (
-            f"- No encontré estación con '{estacion}'.\n"
-            "- Prueba con la calle donde está (p. ej. 'Reforma', "
-            "'20 de Noviembre' o 'Insurgentes') o el número de la cicloestación."
-        )
     por_id = {e["station_id"]: e for e in estado["data"]["stations"]}
-    # Referencia: la de más bicis entre las que casan (desempate: id menor).
-    # Se declara con el criterio a la vista y no se lista como hallazgo:
-    # presentarla a 0 m como "la más cercana" era redundante y elegir por
-    # orden del feed parecía arbitrario.
-    ref = max(
-        candidatas,
-        key=lambda s: (
-            por_id.get(s["station_id"], {}).get("num_bikes_available", 0),
-            -_id_num(s),
-        ),
-    )
-    punto = _coords(ref)
-    if punto is None:
-        return "Error: la referencia no trae coordenadas."
-
-    bicis_ref = por_id.get(ref["station_id"], {}).get("num_bikes_available", 0)
-    nombre_ref = f"{ref.get('name')} ({ref.get('short_name')})"
-    bicis_txt = "1 bici" if bicis_ref == 1 else f"{bicis_ref} bicis"
-    linea_ref = (
-        f"- Referencia: {nombre_ref}, con {bicis_txt}: "
-        f"la de más bicis entre {len(candidatas)} coincidencia(s) con '{estacion}'."
-    )
+    if centro is not None:
+        titulo = "tu ubicación"
+        nombre_ref = titulo
+        ref_id = None
+        bicis_ref = 0
+        linea_ref = "- Referencia: tu ubicación."
+        punto = centro
+    else:
+        clave = _normaliza(estacion)
+        candidatas = [s for s in info if _casa(s, clave)]
+        if not candidatas:
+            return (
+                f"- No encontré estación con '{estacion}'.\n"
+                "- Prueba con la calle donde está (p. ej. 'Reforma', "
+                "'20 de Noviembre' o 'Insurgentes') o el número de la cicloestación."
+            )
+        # Referencia: la de más bicis entre las que casan (desempate: id
+        # menor). Se declara con el criterio a la vista y no se lista como
+        # hallazgo: presentarla a 0 m como "la más cercana" era redundante
+        # y elegir por orden del feed parecía arbitrario.
+        ref = max(
+            candidatas,
+            key=lambda s: (
+                por_id.get(s["station_id"], {}).get("num_bikes_available", 0),
+                -_id_num(s),
+            ),
+        )
+        punto = _coords(ref)
+        if punto is None:
+            return "Error: la referencia no trae coordenadas."
+        titulo = f"'{estacion}'"
+        ref_id = ref["station_id"]
+        bicis_ref = por_id.get(ref["station_id"], {}).get("num_bikes_available", 0)
+        nombre_ref = f"{ref.get('name')} ({ref.get('short_name')})"
+        bicis_txt = "1 bici" if bicis_ref == 1 else f"{bicis_ref} bicis"
+        linea_ref = (
+            f"- Referencia: {nombre_ref}, con {bicis_txt}: "
+            f"la de más bicis entre {len(candidatas)} coincidencia(s) con '{estacion}'."
+        )
     vecinas = []
     for s in info:
-        if s["station_id"] == ref["station_id"]:
+        if ref_id is not None and s["station_id"] == ref_id:
             continue
         lugar = _coords(s)
         if lugar is None:
@@ -336,17 +498,17 @@ def ecobici_cercanas(estacion: str, radio_m: int = 1000) -> str:
     if not vecinas:
         if bicis_ref > 0:
             return (
-                f"Ecobici cerca de '{estacion}'{edad}:\n"
+                f"Ecobici cerca de {titulo}{edad}:\n"
                 f"{linea_ref}\n"
                 f"- Sin otras estaciones con bicis en {radio_m} m."
             )
+        detalle = f" (referencia: {nombre_ref})." if ref_id is not None else "."
         return (
-            f"- No hay bicis en {radio_m} m alrededor de '{estacion}' "
-            f"(referencia: {nombre_ref}).\n"
+            f"- No hay bicis en {radio_m} m alrededor de {titulo}{detalle}\n"
             "- Prueba con otra calle o número."
         )
     lineas = [
-        f"Ecobici cerca de '{estacion}'{edad}:",
+        f"Ecobici cerca de {titulo}{edad}:",
         linea_ref,
         "| Estación | Distancia | Bicis | Espacios |",
         "|---|---|---|---|",
@@ -446,4 +608,7 @@ def ecobici(estacion: str, conclusion: bool = False) -> str:
 # search_files y list_files existen pero están inhabilitadas: la búsqueda en
 # archivos locales no es parte del producto. Se conservan el código y sus
 # tests por si se reactivan.
-TOOLS = [calculator, get_weather, ecobici, ecobici_cercanas]
+TOOLS = [
+    calculator, get_weather, clima_aqui, ecobici, ecobici_cercanas,
+    ubicacion, geocodificar_inverso,
+]

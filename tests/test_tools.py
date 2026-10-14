@@ -10,7 +10,7 @@ import urllib.request
 
 import pytest
 
-from agent.tools import calculator, ecobici, ecobici_cercanas, search_files
+from agent.tools import calculator, clima_aqui, ecobici, ecobici_cercanas, get_weather, search_files
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Calculadora
@@ -264,6 +264,169 @@ class TestEcobici:
 
         monkeypatch.setattr(urllib.request, "urlopen", rota)
         assert ecobici.invoke({"estacion": "reforma"}).startswith("Error:")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Clima (red mockeada)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+CLIMA_MOCK = {
+    "current_condition": [
+        {
+            "temp_C": "22",
+            "FeelsLikeC": "20",
+            "lang_es": [{"value": "Soleado"}],
+            "weatherDesc": [{"value": "Sunny"}],
+            "humidity": "48",
+            "windspeedKmph": "10",
+        }
+    ]
+}
+
+
+class _TextoPlano:
+    def __init__(self, texto: str):
+        self._crudo = texto.encode()
+
+    def read(self):
+        return self._crudo
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+class TestClima:
+    def test_ciudad_con_espacios_se_codifica(self, monkeypatch):
+        urls = []
+
+        class R(_Respuesta):
+            pass
+
+        def falsa(peticion, timeout=None):
+            url = peticion.full_url if hasattr(peticion, "full_url") else peticion
+            urls.append(url)
+            return _Respuesta(CLIMA_MOCK)
+
+        monkeypatch.setattr(urllib.request, "urlopen", falsa)
+        salida = get_weather.invoke({"city": "centro de la cdmx"})
+        assert " " not in urls[0].split("?", 1)[0]
+        assert "22" in salida and "Soleado" in salida
+
+    def test_fallo_dice_donde(self, monkeypatch):
+        def rota(peticion, timeout=None):
+            raise urllib.error.URLError("sin red")
+
+        monkeypatch.setattr(urllib.request, "urlopen", rota)
+        assert get_weather.invoke({"city": "Madrid"}).startswith("No pude obtener")
+
+    def test_ubicacion_ciudad_aproximada(self, monkeypatch):
+        from agent.tools import ubicacion
+
+        def falsa(peticion, timeout=None):
+            return _Respuesta(
+                {"status": "success", "country": "Mexico",
+                 "regionName": "México", "city": "Naucalpan",
+                 "lat": 19.5, "lon": -99.2}
+            )
+
+        monkeypatch.setattr(urllib.request, "urlopen", falsa)
+        salida = ubicacion.invoke({})
+        assert "Naucalpan" in salida and "aproximado por IP" in salida
+
+    def test_ubicacion_fallo_api(self, monkeypatch):
+        from agent.tools import ubicacion
+
+        def falsa(peticion, timeout=None):
+            return _Respuesta({"status": "fail", "message": "reserved range"})
+
+        monkeypatch.setattr(urllib.request, "urlopen", falsa)
+        assert ubicacion.invoke({}).startswith("No pude obtener tu ubicación")
+
+
+class TestGeocodificarInverso:
+    def test_barrio_y_alcaldia(self, monkeypatch):
+        from agent.tools import geocodificar_inverso
+
+        def falsa(peticion, timeout=None):
+            return _Respuesta(
+                {"address": {"neighbourhood": "Roma Norte", "borough": "Cuauhtémoc"}}
+            )
+
+        monkeypatch.setattr(urllib.request, "urlopen", falsa)
+        salida = geocodificar_inverso.invoke({"lat": 19.43, "lon": -99.16})
+        assert salida == "Estás en Roma Norte, Cuauhtémoc (ubicación precisa)."
+
+    def test_sin_barrio_usa_calle(self, monkeypatch):
+        from agent.tools import geocodificar_inverso
+
+        def falsa(peticion, timeout=None):
+            return _Respuesta({"address": {"road": "Eje Central", "city": "CDMX"}})
+
+        monkeypatch.setattr(urllib.request, "urlopen", falsa)
+        assert "Eje Central" in geocodificar_inverso.invoke({"lat": 19.4, "lon": -99.1})
+
+    def test_sin_datos_no_inventa_ciudad(self, monkeypatch):
+        from agent.tools import geocodificar_inverso
+
+        def falsa(peticion, timeout=None):
+            return _Respuesta({"address": {}})
+
+        monkeypatch.setattr(urllib.request, "urlopen", falsa)
+        salida = geocodificar_inverso.invoke({"lat": 19.4, "lon": -99.1})
+        assert salida == "Estás por aquí (ubicación precisa)."
+
+    def test_coords_invalidas_es_error(self):
+        from agent.tools import geocodificar_inverso
+
+        # LangChain valida tipos antes de ejecutar: el string ni llega.
+        assert geocodificar_inverso.invoke({"lat": 999, "lon": 0}).startswith("Error:")
+
+    def test_aqui_sin_ciudad_usa_ip(self, monkeypatch):
+        urls = []
+
+        def falsa(peticion, timeout=None):
+            url = peticion.full_url if hasattr(peticion, "full_url") else peticion
+            urls.append(url)
+            return _Respuesta(CLIMA_MOCK)
+
+        monkeypatch.setattr(urllib.request, "urlopen", falsa)
+        salida = clima_aqui.invoke({})
+        assert urls[0].split("?", 1)[0].endswith("wttr.in/")
+        assert "ubicación aproximada" in salida and "22" in salida
+
+    def test_aqui_muestra_la_ciudad(self, monkeypatch):
+        from agent.tools import clima_aqui
+
+        def falsa(peticion, timeout=None):
+            url = peticion.full_url if hasattr(peticion, "full_url") else peticion
+            if "format=%l" in url:
+                return _TextoPlano("Tlalnepantla, México")
+            return _Respuesta(CLIMA_MOCK)
+
+        monkeypatch.setattr(urllib.request, "urlopen", falsa)
+        salida = clima_aqui.invoke({})
+        assert "Clima en Tlalnepantla, México (ubicación aproximada)" in salida
+
+    def test_condicion_inglesa_se_traduce(self, monkeypatch):
+        import copy
+
+        sin_es = copy.deepcopy(CLIMA_MOCK)
+        del sin_es["current_condition"][0]["lang_es"]
+        sin_es["current_condition"][0]["weatherDesc"] = [{"value": "Cloudy "}]
+
+        def falsa(peticion, timeout=None):
+            url = peticion.full_url if hasattr(peticion, "full_url") else peticion
+            if "format=%l" in url:
+                return _TextoPlano("X")
+            return _Respuesta(sin_es)
+
+        monkeypatch.setattr(urllib.request, "urlopen", falsa)
+        salida = clima_aqui.invoke({})
+        assert "nublado" in salida and "Cloudy" not in salida
 
 
 # ─────────────────────────────────────────────────────────────────────────────

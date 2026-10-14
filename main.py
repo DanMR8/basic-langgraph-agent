@@ -79,8 +79,17 @@ def _emitir(payload) -> None:
         valor = pendientes[0].value
         if "herramientas" in valor:
             payload = Command(resume=_pedir_aprobacion(valor["herramientas"]))
-        else:
+        elif valor.get("tipo") == "ubicacion":
+            # Sin GPS en terminal: se sigue el camino sin ubicación.
+            print("\n📍 Sin GPS en terminal: sigo sin tu ubicación.")
+            payload = Command(resume={"estado": "no_disponible"})
+        elif valor.get("tipo") == "ubicacion_respuesta":
+            # Sin GPS en terminal: aproximada por IP, con su aprobación.
+            payload = Command(resume={"estado": "ip"})
+        elif valor.get("tipo") == "oferta_cercanas":
             payload = Command(resume=_pedir_si_no(valor["pregunta"]))
+        else:
+            payload = Command(resume="rechazar")
 
     print()
 
@@ -91,6 +100,9 @@ def _volcar_fijos(fijos: dict[str, str]) -> None:
         if nodo == "tools":
             # La conclusión determinista es para el trabajador, no se muestra.
             texto = re.sub(r"(?m)^- Conclusión: .*$\n?", "", texto).strip()
+            # El eco de ubicación ya es la respuesta: no duplicarlo aquí.
+            if texto.startswith("Estás en"):
+                continue
             print(f"\n   ⚙️  {texto}")
         else:
             print(texto, end="", flush=True)

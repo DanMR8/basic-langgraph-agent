@@ -4,11 +4,14 @@
 
 Agente conversacional en español con herramientas, construido con **LangGraph** y un **LLM local** (Ollama). Proyecto de muestra: consulta disponibilidad de bicis Ecobici en tiempo real, y además calcula y da el clima, siempre bajo aprobación humana, con streaming y memoria de sesión.
 
+![Demo](assets/se1.mp4)
+
 ## Qué hace
 
 - Conversa en español de forma directa y concisa.
 - Consulta disponibilidad de bicis **Ecobici en tiempo real** (más calculadora y clima actual) clasificando cada turno.
 - Si hay pocas bicis, te ofrece revisar estaciones cercanas antes de cerrar.
+- Si preguntas dónde estás, eliges ubicación precisa (GPS) o aproximada.
 - **Pide tu autorización antes de ejecutar** cualquier herramienta, mostrándote qué va a hacer y con qué argumentos.
 - Si rechazas o algo falla, lo dice claramente y el turno termina sin inventar resultados.
 - Recuerda la conversación dentro de la sesión.
@@ -21,6 +24,9 @@ Agente conversacional en español con herramientas, construido con **LangGraph**
 | `ecobici_cercanas` | Bicis disponibles cerca de una estación (radio 1 km) |
 | `calculator` | Aritmética segura (sin ejecutar código) |
 | `get_weather` | Clima actual de una ciudad |
+| `clima_aqui` | Clima actual de tu ubicación aproximada (por IP, sin ciudad) |
+| `ubicacion` | Tu ciudad aproximada por IP (solo si preguntas dónde estás) |
+| `geocodificar_inverso` | Colonia y alcaldía de unas coordenadas (solo uso interno) |
 
 ## Quickstart
 
@@ -37,8 +43,23 @@ pip install -e .
 ```bash
 ollama pull llama3.1:8b   # https://ollama.com
 cp .env.example .env      # solo si usas otro modelo o puerto
+```
+
+### Terminal (CLI)
+
+```bash
 python main.py
 ```
+
+### App completa (Flet)
+
+```bash
+python -m front.app
+```
+
+La app abre ventana propia con chat, burbujas y diálogos de aprobación. Para
+la ubicación precisa por GPS en Windows: `pip install -e ".[gps]"` y activa
+Ubicación en Configuración del sistema.
 
 > En Windows, si tu consola no es UTF-8 usa Windows Terminal o `chcp 65001`,
 > o ejecuta con `python -X utf8 main.py`.
@@ -74,6 +95,12 @@ Tú › qué clima hace en Guadalajara
        • get_weather(city='Guadalajara')
        ¿Autorizas? [s/N] n
       Rechazaste el uso de la herramienta necesaria: get_weather. No se ejecutó y no tengo su resultado.
+
+Tú › ¿dónde estoy?
+🤖 › ⚠️  El agente quiere ejecutar:
+       • ubicacion()
+       ¿Autorizas? [s/N] s
+      Estás en Naucalpan, México (aproximado por IP). No es tu dirección exacta.
 ```
 
 ## Arquitectura
@@ -88,13 +115,18 @@ START ──► router ───────┤
                                                                    │                  error→reintenta,
                                                                    │                  ok→redacta)
                                                                    └── rechazo ──► respuesta fija
-```
+
+"dónde estoy" tiene rama propia (precisa con GPS, aproximada con IP):
+
+    trabajador ──► elegir ──┬─ precisa ──► geocodifica ──► respuesta
+                             ├─ aproximada ──► approve ──► tools ──► respuesta
+                             └─ rechazo ──► respuesta fija
 
 El diseño separa tres responsabilidades que en un agente clásico van
 mezcladas:
 
 - **router** — Clasifica cada turno en una palabra (`TEXTO | CALCULO | CLIMA |
-  MOVILIDAD`). Es la única pieza que decide, y decide poco a propósito: ante la
+  MOVILIDAD | UBICACION`). Es la única pieza que decide, y decide poco a propósito: ante la
   duda, se habla, no se actúa.
 - **hablador** — Responde la conversación sin herramientas vinculadas. Puede
   hablar de ellas pero nunca usarlas, así que por construcción no anuncia
@@ -123,11 +155,17 @@ pytest
 
 La suite sustituye el LLM por un doble, así que **no necesita Ollama ni red**.
 
+## Interfaz
+
+Además de la terminal (`python main.py`), hay front en Flet (`python -m front.app`):
+chat con burbujas, diálogos de aprobación y toggle de ubicación precisa.
+
 ## Dependencias principales
 
 - [LangGraph](https://github.com/langchain-ai/langgraph) — orquestación con grafos, `interrupt()`, checkpointing
 - [LangChain](https://github.com/langchain-ai/langchain) — abstracciones de LLM y herramientas
 - [Ollama](https://ollama.com) — runtime de modelos locales
+- [Flet](https://flet.dev) — interfaz de escritorio (`python -m front.app`)
 
 ## Licencia
 

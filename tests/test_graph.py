@@ -26,7 +26,7 @@ from config.settings import (
     TEMPERATURA_ROUTER,
     TEMPERATURA_TRABAJADOR,
 )
-from tests.conftest import mock_gbfs, pide_herramienta, responde
+from tests.conftest import RespuestaGBFS, mock_gbfs, pide_herramienta, responde
 from tests.test_tools import ESTADO_CERCA, INFO_CERCA
 
 
@@ -49,6 +49,7 @@ def test_nodos_del_grafo():
         "router",
         "hablador",
         "trabajador",
+        "elegir",
         "approve",
         "tools",
         "ofrecer",
@@ -62,8 +63,11 @@ def test_herramientas_expuestas():
     assert {t.name for t in TOOLS} == {
         "calculator",
         "get_weather",
+        "clima_aqui",
         "ecobici",
         "ecobici_cercanas",
+        "ubicacion",
+        "geocodificar_inverso",
     }
 
 
@@ -106,6 +110,31 @@ def test_etiqueta_desconocida_va_a_texto(montar_grafo):
 )
 def test_route_router(ruta, esperado):
     assert route_router({"ruta": ruta}) == esperado
+
+
+def test_router_manda_historial_no_solo_pregunta(monkeypatch):
+    from agent import nodes as _n
+
+    visto = {}
+
+    class Cap:
+        def invoke(self, messages):
+            visto["mensajes"] = messages
+            return responde("TEXTO")
+
+    monkeypatch.setattr(_n, "llm_router", Cap())
+    _n.router(
+        {
+            "messages": [
+                HumanMessage(content="quiero el clima"),
+                responde("¿De qué ciudad?"),
+                HumanMessage(content="en azcapotzalco"),
+            ]
+        }
+    )
+    texto = [m for m in visto["mensajes"] if m["role"] == "user"][0]["content"]
+    assert "Historial:" in texto
+    assert "quiero el clima" in texto and "en azcapotzalco" in texto
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -173,7 +202,7 @@ def test_ciudad_inventada_ni_siquiera_pide_permiso(montar_grafo):
     assert grafo.get_state(cfg).next == ()
     assert textos_ai(grafo, cfg) == [
         "Me falta la ciudad en tu mensaje: dime de qué ciudad quieres "
-        "el clima (p. ej. 'Madrid')."
+        "el clima (p. ej. 'Coyoacán')."
     ]
 
 
@@ -184,6 +213,93 @@ def test_ciudad_respaldada_si_pide_permiso(montar_grafo):
     )
     grafo.invoke({"messages": [HumanMessage(content="clima en Madrid?")]}, config=cfg)
     assert grafo.get_state(cfg).next == ("approve",)
+
+
+def test_clima_aqui_sin_argumentos_pide_permiso(montar_grafo):
+    """Sin args no hay nada que respaldar: va directo al gate."""
+    grafo, cfg = montar_grafo(
+        router="CLIMA",
+        trabaja=[pide_herramienta("clima_aqui", {})],
+    )
+    grafo.invoke({"messages": [HumanMessage(content="qué clima hace aquí?")]}, config=cfg)
+    assert grafo.get_state(cfg).next == ("approve",)
+
+
+def test_ubicacion_pide_permiso(montar_grafo):
+    grafo, cfg = montar_grafo(
+        router="UBICACION",
+        trabaja=[pide_herramienta("ubicacion", {})],
+    )
+    grafo.invoke({"messages": [HumanMessage(content="dónde estoy?")]}, config=cfg)
+    assert grafo.get_state(cfg).next == ("elegir",)
+
+
+def test_ubicacion_redacta_con_eco(montar_grafo, monkeypatch):
+    def falsa(peticion, timeout=None):
+        return RespuestaGBFS(
+            {"status": "success", "country": "Mexico",
+             "regionName": "México", "city": "Naucalpan",
+             "lat": 19.5, "lon": -99.2}
+        )
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", falsa)
+    grafo, cfg = montar_grafo(
+        router="UBICACION",
+        trabaja=[pide_herramienta("ubicacion", {})],
+    )
+    grafo.invoke({"messages": [HumanMessage(content="dónde estoy?")]}, config=cfg)
+    assert grafo.get_state(cfg).next == ("elegir",)
+    grafo.invoke(Command(resume={"estado": "ip"}), config=cfg)
+    assert grafo.get_state(cfg).next == ("approve",)
+    grafo.invoke(Command(resume="aprobar"), config=cfg)
+    assert grafo.get_state(cfg).next == ()
+    assert textos_ai(grafo, cfg) == [
+        "Estás en Naucalpan, México (Mexico), aproximado por IP. "
+        "No es tu dirección exacta."
+    ]
+
+
+def test_ubicacion_precisa_geocodifica(montar_grafo, monkeypatch):
+    def falsa(peticion, timeout=None):
+        url = peticion.full_url if hasattr(peticion, "full_url") else peticion
+        assert "nominatim" in url
+        return RespuestaGBFS(
+            {"address": {"neighbourhood": "Roma Norte", "borough": "Cuauhtémoc"}}
+        )
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", falsa)
+    grafo, cfg = montar_grafo(
+        router="UBICACION",
+        trabaja=[pide_herramienta("ubicacion", {})],
+    )
+    grafo.invoke({"messages": [HumanMessage(content="dónde estoy?")]}, config=cfg)
+    assert grafo.get_state(cfg).next == ("elegir",)
+    grafo.invoke(
+        Command(resume={"estado": "precisa", "lat": 19.43, "lon": -99.16}), config=cfg
+    )
+    assert grafo.get_state(cfg).next == ()
+    assert textos_ai(grafo, cfg) == [
+        "Estás en Roma Norte, Cuauhtémoc (ubicación precisa)."
+    ]
+
+
+def test_ubicacion_rechazada_fijo(montar_grafo):
+    grafo, cfg = montar_grafo(
+        router="UBICACION",
+        trabaja=[pide_herramienta("ubicacion", {})],
+    )
+    grafo.invoke({"messages": [HumanMessage(content="dónde estoy?")]}, config=cfg)
+    assert grafo.get_state(cfg).next == ("elegir",)
+    grafo.invoke(Command(resume={"estado": "rechazado"}), config=cfg)
+    assert grafo.get_state(cfg).next == ()
+    assert textos_ai(grafo, cfg) == [
+        "Rechazaste el uso de la herramienta necesaria: ubicacion. "
+        "No se ejecutó y no tengo su resultado."
+    ]
 
 
 def test_cercanas_respaldada_pide_permiso(montar_grafo):
@@ -495,19 +611,92 @@ def test_detector_ubicacion(texto, esperado):
     assert _pide_ubicacion(texto) is esperado
 
 
-def test_ubicacion_compuesta_frase_mas_guia(montar_grafo):
+def _ubica(montar_grafo, monkeypatch, texto_humano, argucias=None, frase=None):
+    """Monta el turno hasta el interrupt de ubicación y lo devuelve."""
+    from tests.test_tools import ESTADO_CERCA, INFO_CERCA
+
+    mock_gbfs(monkeypatch, INFO_CERCA, ESTADO_CERCA)
     grafo, cfg = montar_grafo(
         router="MOVILIDAD",
-        trabaja=[pide_herramienta("ecobici", {"estacion": "cercanas"})],
+        trabaja=[pide_herramienta("ecobici", argucias or {"estacion": "mi"})],
+        frase=frase,
+    )
+    grafo.invoke({"messages": [HumanMessage(content=texto_humano)]}, config=cfg)
+    assert grafo.get_state(cfg).next == ("approve",)
+    valor = [
+        i for t in grafo.get_state(cfg).tasks for i in t.interrupts
+    ][0].value
+    assert valor.get("tipo") == "ubicacion"
+    return grafo, cfg
+
+
+def test_ubicacion_ok_ejecuta_cercanas(montar_grafo, monkeypatch):
+    grafo, cfg = _ubica(
+        montar_grafo, monkeypatch, "bicis cerca de mí",
+        frase=[responde("X")],
+    )
+    grafo.invoke(Command(resume={"estado": "ok", "lat": 19.431, "lon": -99.19}), config=cfg)
+    assert grafo.get_state(cfg).next == ()
+    assert textos_ai(grafo, cfg) == [
+        "Cerca de tu ubicación: lo mejor es Lealtad - Referencia, 5 bicis a 111 m."
+    ]
+
+
+def test_ubicacion_denegado_compuesto(montar_grafo, monkeypatch):
+    grafo, cfg = _ubica(
+        montar_grafo, monkeypatch, "bicis cerca de mí",
         frase=[responde("No tengo acceso a tu ubicación.")],
     )
-    grafo.invoke({"messages": [HumanMessage(content="bicis cerca de mí")]}, config=cfg)
+    grafo.invoke(Command(resume={"estado": "denegado"}), config=cfg)
     assert grafo.get_state(cfg).next == ()
     assert textos_ai(grafo, cfg) == [
         "No tengo acceso a tu ubicación. Me falta una referencia en tu mensaje: "
         "dime la calle donde está (p. ej. 'Reforma', '20 de Noviembre' o 'Insurgentes') "
         "o el número de la cicloestación (p. ej. '261')."
     ]
+
+
+def test_ubicacion_timeout_fijo(montar_grafo, monkeypatch):
+    grafo, cfg = _ubica(montar_grafo, monkeypatch, "bicis cerca de mí")
+    grafo.invoke(Command(resume={"estado": "timeout"}), config=cfg)
+    assert grafo.get_state(cfg).next == ()
+    assert textos_ai(grafo, cfg) == [
+        "No pude obtener tu ubicación (tiempo agotado o sin señal). Seguimos "
+        "sin ella: Me falta una referencia en tu mensaje: dime la calle donde "
+        "está (p. ej. 'Reforma', '20 de Noviembre' o 'Insurgentes') o el número "
+        "de la cicloestación (p. ej. '261')."
+    ]
+
+
+def test_ubicacion_apagado_fijo(montar_grafo, monkeypatch):
+    grafo, cfg = _ubica(montar_grafo, monkeypatch, "bicis cerca de mí")
+    grafo.invoke(Command(resume={"estado": "apagado"}), config=cfg)
+    assert grafo.get_state(cfg).next == ()
+    assert textos_ai(grafo, cfg) == [
+        "Necesitas tener activada la ubicación en tu dispositivo y darle "
+        "permiso a la app para usarla. Me falta una referencia en tu mensaje: "
+        "dime la calle donde está (p. ej. 'Reforma', '20 de Noviembre' o "
+        "'Insurgentes') o el número de la cicloestación (p. ej. '261')."
+    ]
+
+
+def test_ubicacion_no_disponible_compuesto(montar_grafo, monkeypatch):
+    """CLI: sin GPS, mismo compuesto que denegado."""
+    grafo, cfg = _ubica(
+        montar_grafo, monkeypatch, "bicis cerca de mí",
+        frase=[responde("No tengo acceso a tu ubicación.")],
+    )
+    grafo.invoke(Command(resume={"estado": "no_disponible"}), config=cfg)
+    assert textos_ai(grafo, cfg)[0].startswith("No tengo acceso a tu ubicación.")
+
+
+def test_ubicacion_coords_invalidas_caen_a_guia(montar_grafo, monkeypatch):
+    grafo, cfg = _ubica(
+        montar_grafo, monkeypatch, "bicis cerca de mí",
+        frase=[responde("No tengo acceso a tu ubicación.")],
+    )
+    grafo.invoke(Command(resume={"estado": "ok", "lat": "aquí", "lon": None}), config=cfg)
+    assert textos_ai(grafo, cfg)[0].startswith("No tengo acceso a tu ubicación.")
 
 
 def test_backstop_descarta_frase_con_bicis(montar_grafo):
@@ -518,6 +707,8 @@ def test_backstop_descarta_frase_con_bicis(montar_grafo):
         frase=[responde("Claro, hay 5 bicis cerca de ti.")],
     )
     grafo.invoke({"messages": [HumanMessage(content="bicis cerca de mí")]}, config=cfg)
+    assert grafo.get_state(cfg).next == ("approve",)
+    grafo.invoke(Command(resume={"estado": "denegado"}), config=cfg)
     assert textos_ai(grafo, cfg) == [
         "No tengo acceso a tu ubicación. Me falta una referencia en tu mensaje: "
         "dime la calle donde está (p. ej. 'Reforma', '20 de Noviembre' o 'Insurgentes') "
@@ -547,7 +738,8 @@ def test_relleno_sin_palabras_utiles_no_respalda(montar_grafo):
     grafo.invoke(
         {"messages": [HumanMessage(content="hay bicis cerca de mi?")]}, config=cfg
     )
-    assert grafo.get_state(cfg).next == ()
+    assert grafo.get_state(cfg).next == ("approve",)
+    grafo.invoke(Command(resume={"estado": "denegado"}), config=cfg)
     assert textos_ai(grafo, cfg)[0].startswith("No tengo acceso a tu ubicación.")
 
 
@@ -559,7 +751,8 @@ def test_fragmento_corto_no_respalda_aunque_case(montar_grafo):
         frase=[responde("No tengo acceso a tu ubicación.")],
     )
     grafo.invoke({"messages": [HumanMessage(content="bicis cerca de mí")]}, config=cfg)
-    assert grafo.get_state(cfg).next == ()
+    assert grafo.get_state(cfg).next == ("approve",)
+    grafo.invoke(Command(resume={"estado": "denegado"}), config=cfg)
     assert textos_ai(grafo, cfg)[0].startswith("No tengo acceso a tu ubicación.")
 
 
@@ -570,6 +763,8 @@ def test_tartamudeo_de_la_frase_se_colapsa(montar_grafo):
         frase=[responde("No tengo acceso a tu ubicación.No tengo acceso a tu ubicación.")],
     )
     grafo.invoke({"messages": [HumanMessage(content="bicis cerca de mí")]}, config=cfg)
+    assert grafo.get_state(cfg).next == ("approve",)
+    grafo.invoke(Command(resume={"estado": "denegado"}), config=cfg)
     assert textos_ai(grafo, cfg)[0].startswith(
         "No tengo acceso a tu ubicación. Me falta"
     )
@@ -582,6 +777,8 @@ def test_segunda_frase_se_recorta(montar_grafo):
         frase=[responde("No tengo acceso a tu ubicación. Con gusto te ayudo.")],
     )
     grafo.invoke({"messages": [HumanMessage(content="bicis cerca de mí")]}, config=cfg)
+    assert grafo.get_state(cfg).next == ("approve",)
+    grafo.invoke(Command(resume={"estado": "denegado"}), config=cfg)
     assert textos_ai(grafo, cfg)[0].startswith(
         "No tengo acceso a tu ubicación. Me falta"
     )
@@ -594,6 +791,8 @@ def test_tartamudeo_unido_por_coma_se_colapsa(montar_grafo):
         frase=[responde("No tengo acceso a tu ubicación, no tengo acceso a tu ubicación.")],
     )
     grafo.invoke({"messages": [HumanMessage(content="bicis cerca de mí")]}, config=cfg)
+    assert grafo.get_state(cfg).next == ("approve",)
+    grafo.invoke(Command(resume={"estado": "denegado"}), config=cfg)
     assert textos_ai(grafo, cfg)[0].startswith(
         "No tengo acceso a tu ubicación. Me falta"
     )
@@ -606,6 +805,8 @@ def test_tartamudeo_unido_por_y_se_colapsa(montar_grafo):
         frase=[responde("No tengo acceso a tu ubicación y no tengo acceso a tu ubicación")],
     )
     grafo.invoke({"messages": [HumanMessage(content="bicis cerca de mí")]}, config=cfg)
+    assert grafo.get_state(cfg).next == ("approve",)
+    grafo.invoke(Command(resume={"estado": "denegado"}), config=cfg)
     assert textos_ai(grafo, cfg)[0].startswith(
         "No tengo acceso a tu ubicación. Me falta"
     )

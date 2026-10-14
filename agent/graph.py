@@ -5,11 +5,13 @@ from langgraph.graph import END, START, StateGraph
 
 from agent.nodes import (
     approve,
+    elegir_ubicacion,
     fallo,
     hablador,
     ofrecer,
     resumir,
     route_after_approval,
+    route_elegir,
     route_ofrecer,
     route_router,
     route_tools,
@@ -27,6 +29,7 @@ def build_agent(checkpointer=None):
     Flujo por turno:
         router -> hablador -> END (texto)
         router -> trabajador -> approve -> tools -> trabajador (bucle ReAct)
+        router -> trabajador -> elegir -> tools/approve/END ("dónde estoy")
         En el bucle: error con presupuesto -> reintenta; agotado -> fallo;
         ok -> el trabajador redacta. Rechazo o dato inventado -> fijo -> END.
         Si `ecobici` trae 3 bicis o menos en alguna: ofrecer -> (sí) tools
@@ -44,6 +47,7 @@ def build_agent(checkpointer=None):
     workflow.add_node("router", router)
     workflow.add_node("hablador", hablador)
     workflow.add_node("trabajador", trabajador)
+    workflow.add_node("elegir", elegir_ubicacion)
     workflow.add_node("approve", approve)
     workflow.add_node("tools", run_tools)
     workflow.add_node("ofrecer", ofrecer)
@@ -61,7 +65,12 @@ def build_agent(checkpointer=None):
     workflow.add_conditional_edges(
         "trabajador",
         route_trabajador,
-        {"approve": "approve", "end": END},
+        {"approve": "approve", "elegir": "elegir", "end": END},
+    )
+    workflow.add_conditional_edges(
+        "elegir",
+        route_elegir,
+        {"tools": "tools", "approve": "approve", "end": END},
     )
     workflow.add_conditional_edges(
         "approve",

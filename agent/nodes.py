@@ -1,4 +1,4 @@
-"""Nodos del grafo: se clasifica, se habla o se trabaja con gate humano.
+﻿"""Nodos del grafo: se clasifica, se habla o se trabaja con gate humano.
 El router decide la ruta; la rama texto habla sin herramientas vinculadas;
 la rama herramienta es un mini-ReAct: el trabajador pide, el humano aprueba,
 se ejecuta y el trabajador redacta. Los errores reintentables vuelven al
@@ -18,7 +18,7 @@ from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 
 from agent.state import AgentState
-from agent.tools import TOOLS, _normaliza, calculator, ecobici, get_weather
+from agent.tools import TOOLS, _normaliza, calculator, clima_aqui, ecobici, get_weather, ubicacion
 from config.settings import (
     FRASE_UBICACION_PROMPT,
     HABLADOR_PROMPT,
@@ -34,7 +34,7 @@ from config.settings import (
     mensaje_rechazo,
 )
 
-ETIQUETAS = {"TEXTO", "CALCULO", "CLIMA", "MOVILIDAD"}
+ETIQUETAS = {"TEXTO", "CALCULO", "CLIMA", "MOVILIDAD", "UBICACION"}
 REINTENTOS_MAXIMOS = 2
 
 
@@ -81,10 +81,11 @@ def _parecido(palabra: str, candidatas: list[str]) -> bool:
 # Qué puede pedir el trabajador según la ruta que decidió el router.
 _HERRAMIENTAS_POR_RUTA = {
     "CALCULO": [calculator],
-    "CLIMA": [get_weather],
-    # Cercanas NO está vinculada: solo llega como segundo eslabón vía `ofrecer`,
-    # nunca por decisión del trabajador.
+    "CLIMA": [get_weather, clima_aqui],
+    # Cercanas NO está vinculada: solo llega como segundo eslabón vía `ofrecer`
+    # o con centro del flujo de ubicación, nunca por decisión del trabajador.
     "MOVILIDAD": [ecobici],
+    "UBICACION": [ubicacion],
 }
 
 
@@ -94,7 +95,17 @@ def herramientas_para(ruta: str) -> list:
 
 
 def router(state: AgentState) -> dict:
-    """Etiqueta el turno con UNA palabra; lo desconocido va a TEXTO."""
+    """Etiqueta el turno con UNA palabra; lo desconocido va a TEXTO.
+
+    Ve historial reciente, no solo la pregunta: los seguimientos ("en
+    Azcapotzalco" tras hablar del clima) solo se entienden con contexto.
+    """
+    ultimos = state["messages"][-6:]
+    contexto = "\n".join(
+        f"{'Usuario' if m.type == 'human' else 'Asistente'}: "
+        f"{str(getattr(m, 'content', '') or '')[:200]}"
+        for m in ultimos
+    )
     peticion = next(
         (m.content for m in reversed(state["messages"]) if m.type == "human"),
         "",
@@ -103,7 +114,10 @@ def router(state: AgentState) -> dict:
         llm_router.invoke(
             [
                 {"role": "system", "content": ROUTER_PROMPT},
-                {"role": "user", "content": f"Pregunta: {peticion}"},
+                {
+                    "role": "user",
+                    "content": f"Historial:\n{contexto}\nPregunta a clasificar: {peticion}",
+                },
             ]
         ).content
         or ""
@@ -190,8 +204,11 @@ def _rescatar_llamada(texto) -> tuple | None:
 
 
 def route_trabajador(state: AgentState) -> str:
-    """Pidió herramienta -> aprobación; respondió -> fin del turno."""
-    if getattr(state["messages"][-1], "tool_calls", None):
+    """Pidió herramienta -> aprobación; "dónde estoy" elige cómo; si no, fin."""
+    llamadas = getattr(state["messages"][-1], "tool_calls", None)
+    if llamadas:
+        if any(c.get("name") == "ubicacion" for c in llamadas):
+            return "elegir"
         return "approve"
     return "end"
 
@@ -203,6 +220,10 @@ def approve(state: AgentState) -> dict:
     la ciudad o el término no aparecen ahí, ni siquiera se pregunta, se pide
     el dato con mensaje fijo. Lo rechazado termina aquí también con fijo: el
     LLM no lo narra, así que no puede inventar un resultado que nunca existió.
+
+    Si pedía ubicación propia sin referencia, se interrumpe pidiéndola: el
+    front la resuelve (diálogo o toggle) y la CLI declara que no puede. El
+    resume trae {"estado": ...} y de ahí se sigue sin cerrar el turno.
     """
     calls = getattr(state["messages"][-1], "tool_calls", []) or []
     requested = [{"name": c["name"], "args": c.get("args", {})} for c in calls]
@@ -213,6 +234,10 @@ def approve(state: AgentState) -> dict:
             (m.content for m in reversed(state["messages"]) if m.type == "human"),
             "",
         )
+        if _pide_ubicacion(peticion) and any(
+            c.get("name") in ("ecobici", "ecobici_cercanas") for c in calls
+        ):
+            return _flujo_ubicacion(state, peticion)
         if _pide_ubicacion(peticion):
             frase = _frase_ubicacion(peticion)
             return {"messages": [AIMessage(content=f"{frase} {mensaje_falta_dato(faltante)}")]}
@@ -224,6 +249,122 @@ def approve(state: AgentState) -> dict:
 
     names = ", ".join(r["name"] for r in requested)
     return {"messages": [AIMessage(content=mensaje_rechazo(names))]}
+
+
+def elegir_ubicacion(state: AgentState) -> dict:
+    """Un interrupt por nodo: este solo pregunta precisa/IP/rechazo.
+
+    Precisa con coords válidas ejecuta directo (elegirla ya autorizó);
+    aproximada vuelve al gate normal (el grafo la manda a `approve`);
+    rechazo con fijo.
+    """
+    respuesta = interrupt({"tipo": "ubicacion_respuesta"})
+    estado = (
+        (respuesta or {}).get("estado", "rechazado")
+        if isinstance(respuesta, dict)
+        else "rechazado"
+    )
+    if estado == "precisa":
+        lat, lon = (respuesta or {}).get("lat"), (respuesta or {}).get("lon")
+        try:
+            punto = (float(lat), float(lon))
+            if -90 <= punto[0] <= 90 and -180 <= punto[1] <= 180:
+                return {
+                    "messages": [
+                        AIMessage(
+                            content="",
+                            tool_calls=[
+                                {
+                                    "name": "geocodificar_inverso",
+                                    "args": {"lat": punto[0], "lon": punto[1]},
+                                    "id": f"geo-{uuid4().hex[:8]}",
+                                }
+                            ],
+                        )
+                    ]
+                }
+        except (TypeError, ValueError):
+            pass
+    if estado == "ip":
+        return {}
+    return {"messages": [AIMessage(content=mensaje_rechazo("ubicacion"))]}
+
+
+def route_elegir(state: AgentState) -> str:
+    """Geocodificar ya autorizado -> tools; IP -> gate normal; fijo -> fin."""
+    ultimo = state["messages"][-1]
+    if getattr(ultimo, "tool_calls", None):
+        llamada = (ultimo.tool_calls or [{}])[0]
+        if llamada.get("name") == "geocodificar_inverso":
+            return "tools"
+        return "approve"
+    return "end"
+
+
+
+def _flujo_ubicacion(state: AgentState, peticion: str) -> dict:
+    """Pide la ubicación precisa y sigue según lo que responda el front.
+
+    El resume trae {"estado": ...}: "ok" trae además lat/lon y se ejecuta
+    directo (el "sí" ya autorizó esa consulta); cualquier otro estado deja
+    un fijo con el motivo y la guía, y el turno sigue vivo.
+    """
+    respuesta = interrupt({"tipo": "ubicacion"})
+    estado = (
+        (respuesta or {}).get("estado", "denegado")
+        if isinstance(respuesta, dict)
+        else "denegado"
+    )
+    if estado == "ok":
+        lat, lon = (respuesta or {}).get("lat"), (respuesta or {}).get("lon")
+        try:
+            punto = (float(lat), float(lon))
+            if -90 <= punto[0] <= 90 and -180 <= punto[1] <= 180:
+                return {
+                    "messages": [
+                        AIMessage(
+                            content="",
+                            tool_calls=[
+                                {
+                                    "name": "ecobici_cercanas",
+                                    "args": {
+                                        "lat": punto[0],
+                                        "lon": punto[1],
+                                        "radio_m": 1000,
+                                    },
+                                    "id": f"ubi-{uuid4().hex[:8]}",
+                                }
+                            ],
+                        )
+                    ]
+                }
+        except (TypeError, ValueError):
+            pass
+    guia = mensaje_falta_dato("la estación")
+    if estado == "timeout":
+        return {
+            "messages": [
+                AIMessage(
+                    content=(
+                        "No pude obtener tu ubicación (tiempo agotado o sin "
+                        f"señal). Seguimos sin ella: {guia}"
+                    )
+                )
+            ]
+        }
+    if estado == "apagado":
+        return {
+            "messages": [
+                AIMessage(
+                    content=(
+                        "Necesitas tener activada la ubicación en tu "
+                        f"dispositivo y darle permiso a la app para usarla. {guia}"
+                    )
+                )
+            ]
+        }
+    frase = _frase_ubicacion(peticion)
+    return {"messages": [AIMessage(content=f"{frase} {guia}")]}
 
 
 def _args_con_respaldo(calls: list, state: AgentState) -> tuple[bool, str]:
@@ -365,6 +506,10 @@ def route_tools(state: AgentState) -> str:
     if getattr(ultimo, "name", "") == "ecobici_cercanas":
         contenido = str(getattr(ultimo, "content", "") or "")
         return "resumir" if _resumen_cercanas(contenido) else "trabajador"
+    if getattr(ultimo, "name", "") == "geocodificar_inverso":
+        return "resumir"
+    if getattr(ultimo, "name", "") == "ubicacion":
+        return "resumir"
     if getattr(ultimo, "name", "") == "ecobici":
         minimo = _min_bicis(str(getattr(ultimo, "content", "") or ""))
         if minimo is not None and minimo <= 3:
@@ -380,24 +525,36 @@ def _min_bicis(texto: str) -> int | None:
 
 def _resumen_cercanas(texto: str) -> str | None:
     """Una línea con lo mejor medido y desde dónde; None si no parsea."""
-    ref = re.search(r"- Referencia: (.+?), con \d+ bici", texto)
     fila = re.search(
         r"^\| (.+?) \((\d+)\) \| (\d+) m \| (\d+) \|", texto, re.MULTILINE
     )
-    if not ref or not fila:
+    if not fila:
         return None
+    ref = re.search(r"- Referencia: tu ubicación\.", texto)
+    nombre_ref = "tu ubicación" if ref else None
+    if nombre_ref is None:
+        ref2 = re.search(r"- Referencia: (.+?), con \d+ bici", texto)
+        if not ref2:
+            return None
+        nombre_ref = ref2.group(1)
     nombre, _short, dist, bicis = fila.groups()
     return (
-        f"Cerca de {ref.group(1)}: lo mejor es {nombre}, "
+        f"Cerca de {nombre_ref}: lo mejor es {nombre}, "
         f"{bicis} bicis a {dist} m."
     )
 
 
 def resumir(state: AgentState) -> dict:
-    """Cierra el segundo eslabón sin pasar por el trabajador."""
-    ultimo = state["messages"][-1]
-    texto = _resumen_cercanas(str(getattr(ultimo, "content", "") or ""))
-    return {"messages": [AIMessage(content=texto or "Revisa la tabla de arriba.")]}
+    """Cierra sin pasar por el trabajador cuando hay resumen determinista."""
+    contenido = str(getattr(state["messages"][-1], "content", "") or "")
+    texto = _resumen_cercanas(contenido) or _eco_ubicacion(contenido)
+    return {"messages": [AIMessage(content=texto or "Revisa el resultado de arriba.")]}
+
+
+def _eco_ubicacion(texto: str) -> str | None:
+    """La tool ya responde en frase completa: se repite tal cual."""
+    texto = texto.strip()
+    return texto if texto.startswith("Estás en") else None
 
 
 def _ultima_llamada(nombre: str, messages) -> dict:
